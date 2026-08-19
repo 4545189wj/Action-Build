@@ -1393,11 +1393,9 @@ jobs:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
         run: |
           cd kernel_workspace
-          # 修改 oplus_build_kernel.sh，在 make 命令前强制注入 CFLAGS/LDFLAGS
-          sed -i '/^make /i \
-          export CFLAGS="-I/usr/include $CFLAGS" \
-          export LDFLAGS="-L/usr/lib/x86_64-linux-gnu -lelf $LDFLAGS"' \
-          kernel_platform/oplus/build/oplus_build_kernel.sh
+          # 修改顶层 Makefile，在开头强制注入 libelf 路径（确保对所有子目录生效）
+          sed -i '1i export CFLAGS += -I/usr/include' kernel_platform/common/Makefile
+          sed -i '1i export LDFLAGS += -L/usr/lib/x86_64-linux-gnu -lelf' kernel_platform/common/Makefile
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}

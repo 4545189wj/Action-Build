@@ -1393,11 +1393,9 @@ jobs:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
         run: |
           cd kernel_workspace
-          cd kernel_platform/common/tools/bpf/resolve_btfids
-          cp Makefile Makefile.bak
-          sed -i 's/^CFLAGS ?= /CFLAGS ?= -I\/usr\/include /' Makefile
-          sed -i 's/^LDFLAGS ?= /LDFLAGS ?= -L\/usr\/lib\/x86_64-linux-gnu -lelf /' Makefile
-          cd $GITHUB_WORKSPACE/kernel_workspace
+          # 查找所有输出目录中的 resolve_btfids/Makefile 并强制指定 libelf 路径
+          find kernel_platform/out -path "*/tools/bpf/resolve_btfids/Makefile" -exec sed -i 's/^CFLAGS ?= /CFLAGS ?= -I\/usr\/include /' {} \;
+          find kernel_platform/out -path "*/tools/bpf/resolve_btfids/Makefile" -exec sed -i 's/^LDFLAGS ?= /LDFLAGS ?= -L\/usr\/lib\/x86_64-linux-gnu -lelf /' {} \;
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}

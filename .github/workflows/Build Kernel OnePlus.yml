@@ -1393,12 +1393,11 @@ jobs:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
         run: |
           cd kernel_workspace
-          # 强制修改 resolve_btfids 的 Makefile 以绕过 pkg-config
           cd kernel_platform/common/tools/bpf/resolve_btfids
           cp Makefile Makefile.bak
           sed -i 's/^CFLAGS ?= /CFLAGS ?= -I\/usr\/include /' Makefile
           sed -i 's/^LDFLAGS ?= /LDFLAGS ?= -L\/usr\/lib\/x86_64-linux-gnu -lelf /' Makefile
-          cd ../../../../
+          cd $GITHUB_WORKSPACE/kernel_workspace
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}

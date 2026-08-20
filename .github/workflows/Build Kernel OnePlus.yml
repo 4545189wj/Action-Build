@@ -1399,6 +1399,7 @@ jobs:
           which ld
 
           cd kernel_workspace
+          export LD=/usr/bin/ld
 
           # --- 验证 Makefile 修改（可选，保留以便调试） ---
           echo "=== 验证 libbpf Makefile 修改 ==="

@@ -1394,16 +1394,47 @@ jobs:
         run: |
           cd kernel_workspace
 
-          echo "=== 搜索 libbpf 相关文件 ==="
-          find kernel_platform -name "Makefile" -exec grep -l "elfdep" {} \; 2>/dev/null
-          find kernel_platform -type d -name "libbpf" 2>/dev/null
-          find kernel_platform -type f -name "libbpf.a" 2>/dev/null
-          find kernel_platform -type f -name "*.mk" -exec grep -l "libelf" {} \; 2>/dev/null
+          echo "=== 当前目录 ==="
+          pwd
+          ls -la kernel_platform/common/tools/ 2>/dev/null || echo "目录不存在，等待 repo sync 完成..."
 
-          echo "=== 搜索 resolve_btfids 目录 ==="
-          find kernel_platform -type d -name "resolve_btfids" 2>/dev/null
+          # --- 修改 resolve_btfids Makefile（两个位置都改）---
+          for dir in kernel_platform/common kernel_platform/msm-kernel; do
+            if [ -f "${dir}/tools/bpf/resolve_btfids/Makefile" ]; then
+              echo "=== 修改 ${dir}/tools/bpf/resolve_btfids/Makefile ==="
+              cd "${dir}/tools/bpf/resolve_btfids"
+              sed -i '/^CFLAGS += -g/i \
+              LIBELF_FLAGS := $(shell $(HOSTPKG_CONFIG) libelf --cflags 2>/dev/null)\n\
+              LIBELF_LIBS := $(shell $(HOSTPKG_CONFIG) libelf --libs 2>/dev/null || echo -lelf)\n' \
+              Makefile
+              sed -i 's/^CFLAGS += -g.*/& $(LIBELF_FLAGS)/' Makefile
+              sed -i 's/^LIBS = -lelf -lz/LIBS = $(LIBELF_LIBS) -lz/' Makefile
+              cd ../../../..
+            else
+              echo "⚠️ ${dir}/tools/bpf/resolve_btfids/Makefile 不存在，跳过"
+            fi
+          done
 
-          # --- 然后执行原来的编译命令 ---
+          # --- 修改 libbpf Makefile（两个位置都改）---
+          for dir in kernel_platform/common kernel_platform/msm-kernel; do
+            if [ -f "${dir}/tools/lib/bpf/Makefile" ]; then
+              echo "=== 修改 ${dir}/tools/lib/bpf/Makefile ==="
+              cd "${dir}/tools/lib/bpf"
+              sed -i 's/^elfdep: FORCE/# elfdep: FORCE/' Makefile
+              sed -i 's/^	$(call feature_check,libelf)/#	$(call feature_check,libelf)/' Makefile
+              sed -i '/feature_check/i \
+              HAVE_LIBELF = 1' Makefile
+              sed -i 's/^LIBS ?= -lelf -lz/LIBS ?= $(shell pkg-config --libs libelf 2>\/dev\/null || echo -lelf) -lz/' Makefile
+              cd ../../../..
+            else
+              echo "⚠️ ${dir}/tools/lib/bpf/Makefile 不存在，跳过"
+            fi
+          done
+
+          echo "=== 修改后的 resolve_btfids Makefile 内容（common） ==="
+          head -40 kernel_platform/common/tools/bpf/resolve_btfids/Makefile
+
+          # --- 执行原编译命令 ---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}

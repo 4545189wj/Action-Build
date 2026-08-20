@@ -1397,7 +1397,7 @@ jobs:
           cd kernel_platform/common/tools/bpf/resolve_btfids
           cp Makefile Makefile.bak
           sed -i 's/^LIBS = -lelf -lz/LIBELF_LIBS := $(shell $(HOSTPKG_CONFIG) libelf --libs 2>\/dev\/null || echo -lelf)\nLIBS = $(LIBELF_LIBS) -lz/' Makefile
-          cd ../../../..
+          cd $GITHUB_WORKSPACE/kernel_workspace
           # --- 修复结束 ---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}

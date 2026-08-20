@@ -1433,6 +1433,10 @@ jobs:
                 LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
                 ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
           fi
+          echo "=== 输出目录内容 (深度3) ==="
+          find ./kernel_workspace/kernel_platform/out -type f -name "*Image*" -ls 2>/dev/null || echo "无 Image 相关文件"
+          echo "=== vmlinux 文件 ==="
+          find ./kernel_workspace -name "vmlinux" -ls 2>/dev/null || echo "无 vmlinux"
 
       - name: Make AnyKernel3
         run: |

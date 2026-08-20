@@ -1393,19 +1393,11 @@ jobs:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
         run: |
           cd kernel_workspace
-          # --- 1. 修改 libbpf 的 Makefile ---
+          # --- 1. 修改 libbpf 的 Makefile（直接替换 LIBS 定义） ---
           cd kernel_platform/common/tools/lib/bpf
           cp Makefile Makefile.bak
-          sed -i '/feature_check/i \
-          # Force libelf detection via pkg-config\
-          ifeq ($(shell pkg-config --modversion libelf 2>/dev/null),)\
-            $(warning pkg-config for libelf not found, falling back to -lelf)\
-            LIBELF_LIBS = -lelf\
-          else\
-            LIBELF_LIBS = $(shell pkg-config --libs libelf)\
-          endif' Makefile
-          sed -i 's/^LIBS ?= -lelf -lz/LIBS ?= $(LIBELF_LIBS) -lz/' Makefile
-          # 回到 kernel_workspace（用绝对路径确保正确）
+          # 找到 LIBS 定义行并替换为使用 pkg-config 的版本
+          sed -i 's/^LIBS ?= -lelf -lz/LIBS ?= $(shell pkg-config --libs libelf 2>\/dev\/null || echo -lelf) -lz/' Makefile
           cd $GITHUB_WORKSPACE/kernel_workspace
 
           # --- 2. 执行编译 ---

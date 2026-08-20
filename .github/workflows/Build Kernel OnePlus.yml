@@ -1404,15 +1404,6 @@ jobs:
           sed -i 's/^LIBS = -lelf -lz/LIBS = $(LIBELF_LIBS) -lz/' Makefile
           cd ../../../..
 
-          # --- 修改 libbpf Makefile（双重保障） ---
-          cd kernel_platform/common/tools/lib/bpf
-          sed -i 's/^elfdep: FORCE/# elfdep: FORCE/' Makefile
-          sed -i 's/^	$(call feature_check,libelf)/#	$(call feature_check,libelf)/' Makefile
-          sed -i '/feature_check/i \
-          HAVE_LIBELF = 1' Makefile
-          sed -i 's/^LIBS ?= -lelf -lz/LIBS ?= $(shell pkg-config --libs libelf 2>\/dev\/null || echo -lelf) -lz/' Makefile
-          cd ../../../..
-
           # --- 执行原编译命令 ---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}

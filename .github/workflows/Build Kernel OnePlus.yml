@@ -1436,31 +1436,43 @@ jobs:
 
       - name: Make AnyKernel3
         run: |
-          git clone https://github.com/Numbersf/AnyKernel3 --depth=1
-          rm -rf ./AnyKernel3/.git
-          mkdir -p kernel_workspace/kernel_platform/out/Final-Image-Find/
-          image_path=""
-          if [ -d "./kernel_workspace/kernel_platform/common/out/" ]; then
-            image_path=$(find "./kernel_workspace/kernel_platform/common/out/" -name "Image" | head -n 1)
-            if [ -n "$image_path" ]; then
-              echo "✅ 使用 make 编译的统一路径，成功找到 Image 文件"
+            git clone https://github.com/Numbersf/AnyKernel3 --depth=1
+            rm -rf ./AnyKernel3/.git
+            mkdir -p kernel_workspace/kernel_platform/out/Final-Image-Find/
+
+            echo "=== 搜索 Image 文件 ==="
+            find ./kernel_workspace -name "Image" 2>/dev/null || echo "无匹配"
+
+            image_path=""
+            candidates=(
+              "./kernel_workspace/kernel_platform/out/msm-waipio-waipio-gki/gki_kernel/common/arch/arm64/boot/Image"
+              "./kernel_workspace/kernel_platform/out/msm-waipio-waipio-gki/dist/Image"
+              "./kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image"
+              "./kernel_workspace/kernel_platform/out/arch/arm64/boot/Image"
+            )
+            for cand in "${candidates[@]}"; do
+              if [ -f "$cand" ]; then
+                image_path="$cand"
+                echo "✅ 在已知路径找到 Image: $cand"
+                break
+              fi
+            done
+
+            if [ -z "$image_path" ]; then
+              image_path=$(find ./kernel_workspace -type f -name "Image" | head -n 1)
+              if [ -n "$image_path" ]; then
+                echo "✅ 通过全局搜索找到 Image: $image_path"
+              fi
             fi
-          fi
-          if [ -z "$image_path" ] && [ -d "./kernel_workspace/kernel_platform/out/" ]; then
-            image_path=$(find "./kernel_workspace/kernel_platform/out/" -name "Image" | head -n 1)
-            if [ -n "$image_path" ]; then
-              echo "✅ 使用官方脚本编译，成功找到 Image 文件"
+
+            if [ -z "$image_path" ]; then
+              echo "❌ 未找到 Image 文件，构建失败" >&2
+              exit 1
             fi
-          fi
-          if [ -z "$image_path" ]; then
-            echo "❌ 未找到 Image 文件，构建失败" >&2
-            exit 1
-          fi
-          if [ -f "$image_path" ]; then
+
             echo "✅ Image file finally located at: $image_path"
             cp "$image_path" ./AnyKernel3/Image
             cp "$image_path" kernel_workspace/kernel_platform/out/Final-Image-Find/Image
-          fi
 
       - name: Apply KPX and Replace Image
         if: ${{ github.event.inputs.KPM != 'N/A' }}

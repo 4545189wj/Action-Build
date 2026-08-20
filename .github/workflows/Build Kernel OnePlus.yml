@@ -406,11 +406,6 @@ jobs:
           pkg-config --cflags libelf
           pkg-config --libs libelf
 
-      - name: Install lld
-        run: |
-         sudo apt-get update && sudo apt-get install -y lld
-         echo "LD=ld.lld" >> $GITHUB_ENV
-
       - name: Install Ccache-ECS
         run: |
          LIB_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/lib"
@@ -1397,20 +1392,20 @@ jobs:
         if: ${{ github.event.inputs.FAST_BUILD == 'false' || steps.fast_build.outputs.fallback == 'true' }}
         env:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
-          LD: /usr/bin/ld
         run: |
+          # --- 关键修复：安装链接器 ---
+          sudo apt-get update
+          sudo apt-get install -y binutils
+          which ld
+
           cd kernel_workspace
 
+          # --- 验证 Makefile 修改（可选，保留以便调试） ---
           echo "=== 验证 libbpf Makefile 修改 ==="
           grep -n "elfdep" kernel_platform/common/tools/lib/bpf/Makefile || echo "elfdep not found"
           grep -n "LIBELF_LIBS" kernel_platform/common/tools/lib/bpf/Makefile || echo "LIBELF_LIBS not found"
           echo "=== 验证 resolve_btfids Makefile 修改 ==="
           grep -n "LIBELF_LIBS" kernel_platform/common/tools/bpf/resolve_btfids/Makefile || echo "LIBELF_LIBS not found"
-
-          # --- 确保 ld 可用 ---
-          export PATH=/usr/bin:$PATH
-          export LD=/usr/bin/ld
-          export LDFLAGS="-fuse-ld=/usr/bin/ld"
 
           # --- 执行原编译命令 ---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
@@ -1418,7 +1413,6 @@ jobs:
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
           else
             LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
-            LD=/usr/bin/ld \
             ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
           fi
       - name: Make AnyKernel3

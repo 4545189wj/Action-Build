@@ -399,12 +399,16 @@ jobs:
         if: ${{ github.event.inputs.BUILD_NOCACHE == 'false' }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libelf-dev libdw-dev binutils
-          export APT_PACKAGES="python3 git curl libelf-dev build-essential flex bison libssl-dev libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix kmod libdw-dev elfutils dwarves kotlin pkg-config binutils"
+          sudo apt-get install -y pkg-config libelf-dev libdw-dev
+          export APT_PACKAGES="python3 git curl libelf-dev build-essential flex bison libssl-dev libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix kmod libdw-dev elfutils dwarves kotlin pkg-config"
           bash "$GITHUB_WORKSPACE/kernel_workspace/Action-Build/scripts/cache_apt_pkgs.sh" ~/.apt-pkg-cache
           pkg-config --modversion libelf
           pkg-config --cflags libelf
           pkg-config --libs libelf
+
+      - name: Install linker
+        run: |
+         sudo apt-get update && sudo apt-get install -y binutils
 
       - name: Install Ccache-ECS
         run: |

@@ -406,9 +406,10 @@ jobs:
           pkg-config --cflags libelf
           pkg-config --libs libelf
 
-      - name: Install linker
+      - name: Install lld
         run: |
-         sudo apt-get update && sudo apt-get install -y binutils
+         sudo apt-get update && sudo apt-get install -y lld
+         echo "LD=ld.lld" >> $GITHUB_ENV
 
       - name: Install Ccache-ECS
         run: |

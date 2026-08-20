@@ -1399,27 +1399,35 @@ jobs:
           which ld
 
           cd kernel_workspace
-          # 确保路径包含 /usr/bin（即使脚本重置，这里也先添加）
-          export PATH=/usr/bin:$PATH
-          export LD=/usr/bin/ld
-          export LDFLAGS="-fuse-ld=/usr/bin/ld"
-          # ★ 关键：为主机工具设置 HOSTLD 和 HOSTLDFLAGS
-          export HOSTLD=/usr/bin/ld
-          export HOSTLDFLAGS="-fuse-ld=/usr/bin/ld"
 
-          # --- 验证 Makefile 修改 ---
+          # ★ 强制修改 resolve_btfids Makefile，指定绝对路径链接器
+          RESOLVE_MAKEFILE="kernel_platform/common/tools/bpf/resolve_btfids/Makefile"
+          # 若存在 HOSTLD 或 LD 定义，替换为绝对路径；否则追加
+          sed -i 's/^HOSTLD\s*=\s*.*/HOSTLD = \/usr\/bin\/ld/' "$RESOLVE_MAKEFILE" 2>/dev/null || true
+          sed -i 's/^LD\s*=\s*.*/LD = \/usr\/bin\/ld/' "$RESOLVE_MAKEFILE" 2>/dev/null || true
+          # 强制添加 -fuse-ld 到 HOSTLDFLAGS 和 LDFLAGS
+          sed -i 's/^HOSTLDFLAGS\s*=\s*.*/HOSTLDFLAGS = -fuse-ld=\/usr\/bin\/ld/' "$RESOLVE_MAKEFILE" 2>/dev/null || true
+          sed -i 's/^LDFLAGS\s*=\s*.*/LDFLAGS = -fuse-ld=\/usr\/bin\/ld/' "$RESOLVE_MAKEFILE" 2>/dev/null || true
+          # 如果未定义，则在文件末尾追加
+          grep -q '^HOSTLD' "$RESOLVE_MAKEFILE" || echo 'HOSTLD = /usr/bin/ld' >> "$RESOLVE_MAKEFILE"
+          grep -q '^LD' "$RESOLVE_MAKEFILE" || echo 'LD = /usr/bin/ld' >> "$RESOLVE_MAKEFILE"
+          grep -q '^HOSTLDFLAGS' "$RESOLVE_MAKEFILE" || echo 'HOSTLDFLAGS = -fuse-ld=/usr/bin/ld' >> "$RESOLVE_MAKEFILE"
+          grep -q '^LDFLAGS' "$RESOLVE_MAKEFILE" || echo 'LDFLAGS = -fuse-ld=/usr/bin/ld' >> "$RESOLVE_MAKEFILE"
+
+          # --- 验证 Makefile 修改（可选，保留以便调试） ---
           echo "=== 验证 libbpf Makefile 修改 ==="
           grep -n "elfdep" kernel_platform/common/tools/lib/bpf/Makefile || echo "elfdep not found"
           grep -n "LIBELF_LIBS" kernel_platform/common/tools/lib/bpf/Makefile || echo "LIBELF_LIBS not found"
           echo "=== 验证 resolve_btfids Makefile 修改 ==="
           grep -n "LIBELF_LIBS" kernel_platform/common/tools/bpf/resolve_btfids/Makefile || echo "LIBELF_LIBS not found"
+          echo "=== 验证链接器变量 ==="
+          grep -E "^(HOSTLD|LD|HOSTLDFLAGS|LDFLAGS)\s*=" kernel_platform/common/tools/bpf/resolve_btfids/Makefile || echo "No linker vars"
 
           # --- 执行原编译命令（使用 env 强制覆盖） ---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
           else
-            # ★ 在 env 中同时传递 LD 和 HOSTLD
             env LD=/usr/bin/ld LDFLAGS="-fuse-ld=/usr/bin/ld" \
                 HOSTLD=/usr/bin/ld HOSTLDFLAGS="-fuse-ld=/usr/bin/ld" \
                 LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \

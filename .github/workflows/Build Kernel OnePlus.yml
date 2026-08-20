@@ -1394,17 +1394,16 @@ jobs:
         run: |
           cd kernel_workspace
 
-          # --- 修改 resolve_btfids Makefile ---
-          cd kernel_platform/common/tools/bpf/resolve_btfids
-          sed -i '/^CFLAGS += -g/i \
-          LIBELF_FLAGS := $(shell $(HOSTPKG_CONFIG) libelf --cflags 2>/dev/null)\n\
-          LIBELF_LIBS := $(shell $(HOSTPKG_CONFIG) libelf --libs 2>/dev/null || echo -lelf)\n' \
-          Makefile
-          sed -i 's/^CFLAGS += -g.*/& $(LIBELF_FLAGS)/' Makefile
-          sed -i 's/^LIBS = -lelf -lz/LIBS = $(LIBELF_LIBS) -lz/' Makefile
-          cd $GITHUB_WORKSPACE/kernel_workspace
+          echo "=== 搜索 libbpf 相关文件 ==="
+          find kernel_platform -name "Makefile" -exec grep -l "elfdep" {} \; 2>/dev/null
+          find kernel_platform -type d -name "libbpf" 2>/dev/null
+          find kernel_platform -type f -name "libbpf.a" 2>/dev/null
+          find kernel_platform -type f -name "*.mk" -exec grep -l "libelf" {} \; 2>/dev/null
 
-          # --- 执行原编译命令 ---
+          echo "=== 搜索 resolve_btfids 目录 ==="
+          find kernel_platform -type d -name "resolve_btfids" 2>/dev/null
+
+          # --- 然后执行原来的编译命令 ---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}

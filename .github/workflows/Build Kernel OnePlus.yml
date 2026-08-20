@@ -1399,23 +1399,30 @@ jobs:
           which ld
 
           cd kernel_workspace
+          # 确保路径包含 /usr/bin（即使脚本重置，这里也先添加）
+          export PATH=/usr/bin:$PATH
           export LD=/usr/bin/ld
+          export LDFLAGS="-fuse-ld=/usr/bin/ld"
 
-          # --- 验证 Makefile 修改（可选，保留以便调试） ---
+          # --- 验证 Makefile 修改 ---
           echo "=== 验证 libbpf Makefile 修改 ==="
           grep -n "elfdep" kernel_platform/common/tools/lib/bpf/Makefile || echo "elfdep not found"
           grep -n "LIBELF_LIBS" kernel_platform/common/tools/lib/bpf/Makefile || echo "LIBELF_LIBS not found"
           echo "=== 验证 resolve_btfids Makefile 修改 ==="
           grep -n "LIBELF_LIBS" kernel_platform/common/tools/bpf/resolve_btfids/Makefile || echo "LIBELF_LIBS not found"
 
-          # --- 执行原编译命令 ---
+          # --- 执行原编译命令（使用 env 强制覆盖） ---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
           else
-            LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
-            ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
+            # 关键：在命令行中直接传递 LD 和 LDFLAGS 给 make（通过脚本内部的环境变量）
+            # 但 oplus_build_kernel.sh 可能不直接接受这些参数，我们用 env 强制设置环境
+            env LD=/usr/bin/ld LDFLAGS="-fuse-ld=/usr/bin/ld" \
+              LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
+              ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
           fi
+
       - name: Make AnyKernel3
         run: |
           git clone https://github.com/Numbersf/AnyKernel3 --depth=1

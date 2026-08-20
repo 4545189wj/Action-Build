@@ -1393,14 +1393,17 @@ jobs:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
         run: |
           cd kernel_workspace
-          # --- 1. 修改 libbpf 的 Makefile（直接替换 LIBS 定义） ---
+          # --- 强制 libbpf 跳过 elfdep 检测 ---
           cd kernel_platform/common/tools/lib/bpf
           cp Makefile Makefile.bak
-          # 找到 LIBS 定义行并替换为使用 pkg-config 的版本
+          # 在 feature_check 前强制定义 HAVE_LIBELF=1
+          sed -i '/feature_check/i \
+          HAVE_LIBELF = 1' Makefile
+          # 确保 LIBS 也正确
           sed -i 's/^LIBS ?= -lelf -lz/LIBS ?= $(shell pkg-config --libs libelf 2>\/dev\/null || echo -lelf) -lz/' Makefile
           cd $GITHUB_WORKSPACE/kernel_workspace
 
-          # --- 2. 执行编译 ---
+          # --- 执行编译 ---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}

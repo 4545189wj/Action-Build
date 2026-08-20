@@ -1392,10 +1392,6 @@ jobs:
         env:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
         run: |
-          echo "=== 检查 libbpf Makefile 中的 elfdep ==="
-          grep -n "elfdep" kernel_platform/msm-kernel/tools/lib/bpf/Makefile
-          echo "=== 检查 LIBELF_LIBS 定义 ==="
-          grep -n "LIBELF_LIBS" kernel_platform/msm-kernel/tools/lib/bpf/Makefile
           cd kernel_workspace
 
           # --- 1. 修改源码中的 resolve_btfids Makefile ---

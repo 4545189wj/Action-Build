@@ -1440,34 +1440,49 @@ jobs:
             rm -rf ./AnyKernel3/.git
             mkdir -p kernel_workspace/kernel_platform/out/Final-Image-Find/
 
-            echo "=== 搜索 Image 文件 ==="
-            find ./kernel_workspace -name "Image" 2>/dev/null || echo "无匹配"
+            echo "=== 搜索 Image 或 Image.lz4 文件 ==="
+            find ./kernel_workspace -name "Image*" 2>/dev/null | grep -E "Image(\.lz4)?$" || echo "无匹配"
 
             image_path=""
             candidates=(
               "./kernel_workspace/kernel_platform/out/msm-waipio-waipio-gki/gki_kernel/common/arch/arm64/boot/Image"
+              "./kernel_workspace/kernel_platform/out/msm-waipio-waipio-gki/gki_kernel/common/arch/arm64/boot/Image.lz4"
               "./kernel_workspace/kernel_platform/out/msm-waipio-waipio-gki/dist/Image"
+              "./kernel_workspace/kernel_platform/out/msm-waipio-waipio-gki/dist/Image.lz4"
               "./kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image"
+              "./kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image.lz4"
               "./kernel_workspace/kernel_platform/out/arch/arm64/boot/Image"
+              "./kernel_workspace/kernel_platform/out/arch/arm64/boot/Image.lz4"
             )
             for cand in "${candidates[@]}"; do
               if [ -f "$cand" ]; then
                 image_path="$cand"
-                echo "✅ 在已知路径找到 Image: $cand"
+                echo "✅ 在已知路径找到: $cand"
                 break
               fi
             done
 
             if [ -z "$image_path" ]; then
-              image_path=$(find ./kernel_workspace -type f -name "Image" | head -n 1)
+              # 全局搜索
+              image_path=$(find ./kernel_workspace -type f \( -name "Image" -o -name "Image.lz4" \) | head -n 1)
               if [ -n "$image_path" ]; then
-                echo "✅ 通过全局搜索找到 Image: $image_path"
+                echo "✅ 通过全局搜索找到: $image_path"
               fi
             fi
 
             if [ -z "$image_path" ]; then
-              echo "❌ 未找到 Image 文件，构建失败" >&2
+              echo "❌ 未找到 Image 或 Image.lz4 文件，构建失败" >&2
+              # 列出输出目录内容以便调试
+              echo "=== 输出目录内容 (限制深度2) ==="
+              find ./kernel_workspace/kernel_platform/out -maxdepth 2 -type f -ls 2>/dev/null || echo "无法列出"
               exit 1
+            fi
+
+            # 如果是 .lz4，解压
+            if [[ "$image_path" == *.lz4 ]]; then
+              echo "解压 Image.lz4 ..."
+              lz4 -d "$image_path" ./Image
+              image_path="./Image"
             fi
 
             echo "✅ Image file finally located at: $image_path"

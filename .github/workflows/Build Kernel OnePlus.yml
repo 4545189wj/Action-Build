@@ -90,7 +90,7 @@ on:
         type: string
         description: "动态清单仓库所有者//Manifest repository owner"
         required: true
-        default: "Numbersf"
+        default: "4545189wj"
       BUILD_TIME:
         type: string
         description: "自定义构建时间(输入F使用UTCT或-1关闭)//Custom build time (Enter F to use UTCT, or -1 to disable)"
@@ -232,7 +232,7 @@ jobs:
           DYNAMIC_REPO_INPUT="${{ github.event.inputs.DYNAMIC_REPO }}"
           declare -A REPOS
           REPOS["OnePlusOSS"]="OnePlusOSS|kernel_manifest"
-          REPOS["Dynamic"]="${DYNAMIC_REPO_INPUT}|kernel_manifest"
+          REPOS["Dynamic"]="4545189wj|kernel_manifest"
           REPOS["Appendix"]="Numbersf|Kernel_Manifest_Appendix"
 
           FOUND_REPO=""

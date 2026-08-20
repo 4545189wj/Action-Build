@@ -1393,12 +1393,17 @@ jobs:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
         run: |
           cd kernel_workspace
-          # --- 修复 resolve_btfids 的 libelf 检测问题 ---
+          # --- 1. 修改源码中的 Makefile ---
           cd kernel_platform/common/tools/bpf/resolve_btfids
           cp Makefile Makefile.bak
           sed -i 's/^LIBS = -lelf -lz/LIBELF_LIBS := $(shell $(HOSTPKG_CONFIG) libelf --libs 2>\/dev\/null || echo -lelf)\nLIBS = $(LIBELF_LIBS) -lz/' Makefile
-          cd $GITHUB_WORKSPACE/kernel_workspace
-          # --- 修复结束 ---
+          # 验证修改
+          echo "=== Modified Makefile content ==="
+          cat Makefile
+          echo "================================="
+          cd ../../../..
+
+          # --- 2. 执行编译（第一次尝试）---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
@@ -1407,6 +1412,19 @@ jobs:
             ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
           fi
 
+          # --- 3. 如果编译失败，尝试修复输出目录中的 Makefile 并重试 ---
+          if [ $? -ne 0 ]; then
+            echo "第一次编译失败，尝试修复输出目录中的 Makefile..."
+            find kernel_platform/out -path "*/tools/bpf/resolve_btfids/Makefile" -exec sed -i 's/^LIBS = -lelf -lz/LIBELF_LIBS := $(shell $(HOSTPKG_CONFIG) libelf --libs 2>\/dev\/null || echo -lelf)\nLIBS = $(LIBELF_LIBS) -lz/' {} \;
+            echo "重试编译..."
+            if [ -f ./kernel_platform/build_with_bazel.py ]; then
+              ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
+              ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
+            else
+              LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
+              ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
+            fi
+          fi
       - name: Make AnyKernel3
         run: |
           git clone https://github.com/Numbersf/AnyKernel3 --depth=1

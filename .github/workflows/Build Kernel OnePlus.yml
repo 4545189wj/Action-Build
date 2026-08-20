@@ -1392,6 +1392,7 @@ jobs:
         if: ${{ github.event.inputs.FAST_BUILD == 'false' || steps.fast_build.outputs.fallback == 'true' }}
         env:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          LD: /usr/bin/ld
         run: |
           cd kernel_workspace
 
@@ -1401,12 +1402,18 @@ jobs:
           echo "=== 验证 resolve_btfids Makefile 修改 ==="
           grep -n "LIBELF_LIBS" kernel_platform/common/tools/bpf/resolve_btfids/Makefile || echo "LIBELF_LIBS not found"
 
+          # --- 确保 ld 可用 ---
+          export PATH=/usr/bin:$PATH
+          export LD=/usr/bin/ld
+          export LDFLAGS="-fuse-ld=/usr/bin/ld"
+
           # --- 执行原编译命令 ---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
           else
             LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
+            LD=/usr/bin/ld \
             ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
           fi
       - name: Make AnyKernel3

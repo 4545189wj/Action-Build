@@ -1396,6 +1396,7 @@ jobs:
           # --- 关键修复：安装链接器 ---
           sudo apt-get update
           sudo apt-get install -y binutils
+          sudo apt-get install -y dwarves
           which ld
 
           cd kernel_workspace

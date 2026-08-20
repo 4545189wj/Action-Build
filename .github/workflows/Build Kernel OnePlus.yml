@@ -1393,26 +1393,57 @@ jobs:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
         run: |
           cd kernel_workspace
-          # --- 彻底禁用 libbpf 的 elfdep 检测 ---
-          cd kernel_platform/common/tools/lib/bpf
-          cp Makefile Makefile.bak
-          # 注释掉 elfdep 目标的定义（让它变成空目标）
-          sed -i 's/^elfdep: FORCE/# elfdep: FORCE/' Makefile
-          sed -i 's/^	$(call feature_check,libelf)/#	$(call feature_check,libelf)/' Makefile
-          # 强制设置 HAVE_LIBELF=1（作为后备）
-          sed -i '/feature_check/i \
-          HAVE_LIBELF = 1' Makefile
-          # 确保 LIBS 正确
-          sed -i 's/^LIBS ?= -lelf -lz/LIBS ?= $(shell pkg-config --libs libelf 2>\/dev\/null || echo -lelf) -lz/' Makefile
-          cd $GITHUB_WORKSPACE/kernel_workspace
+          
+          # 定义一个函数来修改输出目录中的 Makefile
+          fix_btf_makefiles() {
+            echo "=== 正在修复输出目录中的 Makefile ==="
+            # 修改 libbpf 的 Makefile（注释掉 elfdep 并强制设置 HAVE_LIBELF）
+            find kernel_platform/out -path "*/tools/lib/bpf/Makefile" -exec sed -i 's/^elfdep: FORCE/# elfdep: FORCE/' {} \;
+            find kernel_platform/out -path "*/tools/lib/bpf/Makefile" -exec sed -i 's/^	$(call feature_check,libelf)/#	$(call feature_check,libelf)/' {} \;
+            find kernel_platform/out -path "*/tools/lib/bpf/Makefile" -exec sed -i '/feature_check/i \
+            HAVE_LIBELF = 1' {} \;
+            find kernel_platform/out -path "*/tools/lib/bpf/Makefile" -exec sed -i 's/^LIBS ?= -lelf -lz/LIBS ?= $(shell pkg-config --libs libelf 2>\/dev\/null || echo -lelf) -lz/' {} \;
+            
+            # 修改 resolve_btfids 的 Makefile
+            find kernel_platform/out -path "*/tools/bpf/resolve_btfids/Makefile" -exec sed -i 's/^LIBS = -lelf -lz/LIBELF_LIBS := $(shell $(HOSTPKG_CONFIG) libelf --libs 2>\/dev\/null || echo -lelf)\nLIBS = $(LIBELF_LIBS) -lz/' {} \;
+            
+            echo "=== 修改完成，打印修改后的 libbpf Makefile 头部 ==="
+            find kernel_platform/out -path "*/tools/lib/bpf/Makefile" -exec head -20 {} \;
+          }
 
-          # --- 执行编译 ---
+          # --- 第一次尝试编译 ---
+          echo "=== 第一次编译尝试 ==="
+          set +e  # 允许命令失败，以便我们捕获错误
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
           else
             LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
             ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
+          fi
+          FIRST_EXIT=$?
+          set -e
+
+          # --- 如果第一次失败，修复并重试 ---
+          if [ $FIRST_EXIT -ne 0 ]; then
+            echo "=== 第一次编译失败，开始修复输出目录中的 Makefile ==="
+            fix_btf_makefiles
+            
+            echo "=== 第二次编译尝试 ==="
+            set +e
+            if [ -f ./kernel_platform/build_with_bazel.py ]; then
+              ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
+              ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
+            else
+              LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
+              ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
+            fi
+            SECOND_EXIT=$?
+            set -e
+            if [ $SECOND_EXIT -ne 0 ]; then
+              echo "=== 第二次编译仍然失败，请检查日志 ==="
+              exit $SECOND_EXIT
+            fi
           fi
       - name: Make AnyKernel3
         run: |

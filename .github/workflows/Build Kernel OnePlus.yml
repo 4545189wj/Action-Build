@@ -1396,42 +1396,37 @@ jobs:
 
           echo "=== 当前目录 ==="
           pwd
-          ls -la kernel_platform/common/tools/ 2>/dev/null || echo "目录不存在，等待 repo sync 完成..."
 
-          # --- 修改 resolve_btfids Makefile（两个位置都改）---
-          for dir in kernel_platform/common kernel_platform/msm-kernel; do
-            if [ -f "${dir}/tools/bpf/resolve_btfids/Makefile" ]; then
-              echo "=== 修改 ${dir}/tools/bpf/resolve_btfids/Makefile ==="
-              cd "${dir}/tools/bpf/resolve_btfids"
-              sed -i '/^CFLAGS += -g/i \
-              LIBELF_FLAGS := $(shell $(HOSTPKG_CONFIG) libelf --cflags 2>/dev/null)\n\
-              LIBELF_LIBS := $(shell $(HOSTPKG_CONFIG) libelf --libs 2>/dev/null || echo -lelf)\n' \
-              Makefile
-              sed -i 's/^CFLAGS += -g.*/& $(LIBELF_FLAGS)/' Makefile
-              sed -i 's/^LIBS = -lelf -lz/LIBS = $(LIBELF_LIBS) -lz/' Makefile
-              cd ../../../..
-            else
-              echo "⚠️ ${dir}/tools/bpf/resolve_btfids/Makefile 不存在，跳过"
-            fi
-          done
+          # --- 修改 resolve_btfids Makefile ---
+          if [ -f kernel_platform/common/tools/bpf/resolve_btfids/Makefile ]; then
+            echo "=== 修改 resolve_btfids Makefile ==="
+            cd kernel_platform/common/tools/bpf/resolve_btfids
+            sed -i '/^CFLAGS += -g/i \
+            LIBELF_FLAGS := $(shell $(HOSTPKG_CONFIG) libelf --cflags 2>/dev/null)\n\
+            LIBELF_LIBS := $(shell $(HOSTPKG_CONFIG) libelf --libs 2>/dev/null || echo -lelf)\n' \
+            Makefile
+            sed -i 's/^CFLAGS += -g.*/& $(LIBELF_FLAGS)/' Makefile
+            sed -i 's/^LIBS = -lelf -lz/LIBS = $(LIBELF_LIBS) -lz/' Makefile
+            cd $GITHUB_WORKSPACE/kernel_workspace
+          else
+            echo "⚠️ resolve_btfids Makefile 不存在"
+          fi
 
-          # --- 修改 libbpf Makefile（两个位置都改）---
-          for dir in kernel_platform/common kernel_platform/msm-kernel; do
-            if [ -f "${dir}/tools/lib/bpf/Makefile" ]; then
-              echo "=== 修改 ${dir}/tools/lib/bpf/Makefile ==="
-              cd "${dir}/tools/lib/bpf"
-              sed -i 's/^elfdep: FORCE/# elfdep: FORCE/' Makefile
-              sed -i 's/^	$(call feature_check,libelf)/#	$(call feature_check,libelf)/' Makefile
-              sed -i '/feature_check/i \
-              HAVE_LIBELF = 1' Makefile
-              sed -i 's/^LIBS ?= -lelf -lz/LIBS ?= $(shell pkg-config --libs libelf 2>\/dev\/null || echo -lelf) -lz/' Makefile
-              cd ../../../..
-            else
-              echo "⚠️ ${dir}/tools/lib/bpf/Makefile 不存在，跳过"
-            fi
-          done
+          # --- 修改 libbpf Makefile（如果存在） ---
+          if [ -f kernel_platform/common/tools/lib/bpf/Makefile ]; then
+            echo "=== 修改 libbpf Makefile ==="
+            cd kernel_platform/common/tools/lib/bpf
+            sed -i 's/^elfdep: FORCE/# elfdep: FORCE/' Makefile
+            sed -i 's/^	$(call feature_check,libelf)/#	$(call feature_check,libelf)/' Makefile
+            sed -i '/feature_check/i \
+            HAVE_LIBELF = 1' Makefile
+            sed -i 's/^LIBS ?= -lelf -lz/LIBS ?= $(shell pkg-config --libs libelf 2>\/dev\/null || echo -lelf) -lz/' Makefile
+            cd $GITHUB_WORKSPACE/kernel_workspace
+          else
+            echo "⚠️ libbpf Makefile 不存在，跳过（可能是内联在 resolve_btfids 中）"
+          fi
 
-          echo "=== 修改后的 resolve_btfids Makefile 内容（common） ==="
+          echo "=== 修改后的 resolve_btfids Makefile 内容（前40行） ==="
           head -40 kernel_platform/common/tools/bpf/resolve_btfids/Makefile
 
           # --- 执行原编译命令 ---

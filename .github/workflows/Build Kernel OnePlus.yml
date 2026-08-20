@@ -1393,13 +1393,16 @@ jobs:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
         run: |
           cd kernel_workspace
-          # --- 强制 libbpf 跳过 elfdep 检测 ---
+          # --- 彻底禁用 libbpf 的 elfdep 检测 ---
           cd kernel_platform/common/tools/lib/bpf
           cp Makefile Makefile.bak
-          # 在 feature_check 前强制定义 HAVE_LIBELF=1
+          # 注释掉 elfdep 目标的定义（让它变成空目标）
+          sed -i 's/^elfdep: FORCE/# elfdep: FORCE/' Makefile
+          sed -i 's/^	$(call feature_check,libelf)/#	$(call feature_check,libelf)/' Makefile
+          # 强制设置 HAVE_LIBELF=1（作为后备）
           sed -i '/feature_check/i \
           HAVE_LIBELF = 1' Makefile
-          # 确保 LIBS 也正确
+          # 确保 LIBS 正确
           sed -i 's/^LIBS ?= -lelf -lz/LIBS ?= $(shell pkg-config --libs libelf 2>\/dev\/null || echo -lelf) -lz/' Makefile
           cd $GITHUB_WORKSPACE/kernel_workspace
 

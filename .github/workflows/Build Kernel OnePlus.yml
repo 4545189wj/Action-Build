@@ -1393,10 +1393,9 @@ jobs:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
         run: |
           cd kernel_workspace
-          # --- 1. 修改 libbpf 的 Makefile（真正的元凶） ---
+          # --- 1. 修改 libbpf 的 Makefile ---
           cd kernel_platform/common/tools/lib/bpf
           cp Makefile Makefile.bak
-          # 在 features 检测前强制设置 HAVE_LIBELF 和 HAVE_LIBELF_MMAP
           sed -i '/feature_check/i \
           # Force libelf detection via pkg-config\
           ifeq ($(shell pkg-config --modversion libelf 2>/dev/null),)\
@@ -1405,9 +1404,9 @@ jobs:
           else\
             LIBELF_LIBS = $(shell pkg-config --libs libelf)\
           endif' Makefile
-          # 修改 LIBS 变量
           sed -i 's/^LIBS ?= -lelf -lz/LIBS ?= $(LIBELF_LIBS) -lz/' Makefile
-          cd ../../../..
+          # 回到 kernel_workspace（用绝对路径确保正确）
+          cd $GITHUB_WORKSPACE/kernel_workspace
 
           # --- 2. 执行编译 ---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then

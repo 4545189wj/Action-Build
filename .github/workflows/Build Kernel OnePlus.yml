@@ -1402,7 +1402,7 @@ jobs:
           Makefile
           sed -i 's/^CFLAGS += -g.*/& $(LIBELF_FLAGS)/' Makefile
           sed -i 's/^LIBS = -lelf -lz/LIBS = $(LIBELF_LIBS) -lz/' Makefile
-          cd ../../../..
+          cd $GITHUB_WORKSPACE/kernel_workspace
 
           # --- 执行原编译命令 ---
           if [ -f ./kernel_platform/build_with_bazel.py ]; then

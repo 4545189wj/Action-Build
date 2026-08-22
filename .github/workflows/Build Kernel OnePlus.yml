@@ -1429,24 +1429,59 @@ jobs:
 
           # ============================================================
           # BTF / pahole
+          #
+          # 优先使用 Android 源码树自带的 pahole
+          # 因为它通常与当前 Android 12 / Kernel 5.10
+          # 以及对应 Clang 工具链兼容性更好。
+          #
+          # 如果没有找到 Android prebuilt pahole，
+          # 再 fallback 到 /usr/local/bin/pahole 1.27。
           # ============================================================
-          echo "=== BTF tool ==="
-          /usr/local/bin/pahole --version
-          export PAHOLE=/usr/local/bin/pahole
+          echo "=== Detect BTF tool ==="
+
+          PAHOLE_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
+            -type f \
+            -path "*/kernel-build-tools/linux-x86/bin/pahole" \
+            -perm -111 \
+            | head -n 1)
+
+          if [ -n "$PAHOLE_BIN" ]; then
+            echo "✅ 使用 Android prebuilt pahole:"
+            echo "$PAHOLE_BIN"
+          else
+            echo "⚠️ 没找到 Android prebuilt pahole"
+            echo "⚠️ fallback 到 /usr/local/bin/pahole 1.27"
+
+            PAHOLE_BIN="/usr/local/bin/pahole"
+          fi
+
+          if [ ! -x "$PAHOLE_BIN" ]; then
+            echo "❌ pahole 不存在或不可执行:"
+            echo "$PAHOLE_BIN"
+            exit 1
+          fi
+
+          echo "=== pahole version ==="
+          "$PAHOLE_BIN" --version
+
+          export PAHOLE="$PAHOLE_BIN"
 
           # ============================================================
           # 修复 Android 12 / Kernel 5.10 构建环境
           #
-          # 1. clang-12 链接 resolve_btfids 时会寻找 "ld"
-          # 2. OPPO 构建脚本会重置 PATH，导致 dd / printf 找不到
+          # 1. clang-12 链接 resolve_btfids 时需要名为 ld 的链接器
+          # 2. OPPO / Android build 脚本会重置 PATH
+          # 3. 导致 dd / printf 等系统工具无法找到
           #
-          # 把这些工具放进 Android 构建脚本本身会加入 PATH 的目录
+          # 因此统一放到 Android build 自己会加入 PATH 的目录
           # ============================================================
           echo "=== Fix host build tools ==="
 
           BUILD_TOOLS_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/build/build-tools/path/linux-x86"
 
+          # ------------------------------------------------------------
           # 找 Android Clang 自带的 ld.lld
+          # ------------------------------------------------------------
           LLD_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
             -type f \
             -path "*/clang/host/linux-x86/*/bin/ld.lld" \
@@ -1463,39 +1498,53 @@ jobs:
 
           mkdir -p "$BUILD_TOOLS_BIN"
 
+          # ------------------------------------------------------------
           # clang-12 默认寻找名为 ld 的链接器
+          # 使用 Android 自己的 ld.lld
+          # 不使用系统 GNU ld
+          # ------------------------------------------------------------
           ln -sf "$LLD_BIN" "$BUILD_TOOLS_BIN/ld"
 
-          # 检查系统工具
+          # ------------------------------------------------------------
+          # 检查 dd
+          # ------------------------------------------------------------
           if [ ! -x /usr/bin/dd ]; then
             echo "❌ /usr/bin/dd 不存在"
             exit 1
           fi
 
+          # ------------------------------------------------------------
+          # 检查 printf
+          # ------------------------------------------------------------
           if [ ! -x /usr/bin/printf ]; then
             echo "❌ /usr/bin/printf 不存在"
             exit 1
           fi
 
-          # OPPO / Android 构建环境会重置 PATH
-          # 因此把系统工具链接到 build-tools/path/linux-x86
+          # ------------------------------------------------------------
+          # Android build 重置 PATH 后仍然可以找到这些工具
+          # ------------------------------------------------------------
           ln -sf /usr/bin/dd "$BUILD_TOOLS_BIN/dd"
           ln -sf /usr/bin/printf "$BUILD_TOOLS_BIN/printf"
 
           echo "=== Host tools aliases ==="
+
           ls -l \
             "$BUILD_TOOLS_BIN/ld" \
             "$BUILD_TOOLS_BIN/dd" \
             "$BUILD_TOOLS_BIN/printf"
 
           echo "=== Tool versions ==="
+
           "$BUILD_TOOLS_BIN/ld" --version | head -n 1
           "$BUILD_TOOLS_BIN/dd" --version | head -n 1
           "$BUILD_TOOLS_BIN/printf" --version | head -n 1 || true
 
           # ============================================================
           # 保存完整编译日志
-          # 不直接输出全部日志，避免 GitHub Actions 日志被截断
+          #
+          # 不把几百万行日志直接输出到 GitHub Actions
+          # 防止日志页面被截断
           # ============================================================
           BUILD_LOG="$GITHUB_WORKSPACE/kernel-build.log"
           STATUS_FILE="$GITHUB_WORKSPACE/kernel-build-status.txt"
@@ -1519,12 +1568,22 @@ jobs:
                 "${{ env.CPUD }}" \
                 "${{ env.BUILD_METHOD }}"
 
-              if [ $? -eq 0 ]; then
-                PAHOLE=/usr/local/bin/pahole \
+              MODULE_STATUS=$?
+
+              if [ "$MODULE_STATUS" -eq 0 ]; then
+
+                PAHOLE="$PAHOLE_BIN" \
                   ./kernel_platform/build_with_bazel.py \
                   -t "${{ env.CPUD }}" \
                   "${{ env.BUILD_METHOD }}"
+
+              else
+
+                echo "❌ oplus_modules_variant.sh 失败"
+                exit "$MODULE_STATUS"
+
               fi
+
             ) > "$BUILD_LOG" 2>&1
 
             BUILD_STATUS=$?
@@ -1534,7 +1593,7 @@ jobs:
           # ============================================================
           else
 
-            PAHOLE=/usr/local/bin/pahole \
+            PAHOLE="$PAHOLE_BIN" \
             LTO=thin \
             SYSTEM_DLKM_RE_SIGN=0 \
             BUILD_SYSTEM_DLKM=0 \
@@ -1558,8 +1617,10 @@ jobs:
           # ============================================================
           # 检查真正的编译产物
           #
-          # OPPO 外层脚本可能会吞掉内部 make 的错误，
-          # 所以不能只依赖 BUILD_STATUS
+          # OPPO 外层脚本有可能内部 make 已经失败，
+          # 但最终仍返回 0。
+          #
+          # 所以不能只依赖 BUILD_STATUS。
           # ============================================================
           IMAGE=$(find ./kernel_platform/out \
             -type f \
@@ -1577,6 +1638,7 @@ jobs:
             2>/dev/null | head -n 1)
 
           echo "=== 编译产物 ==="
+
           echo "Image     = ${IMAGE:-未找到}"
           echo "Image.lz4 = ${IMAGE_LZ4:-未找到}"
           echo "vmlinux   = ${VMLINUX:-未找到}"
@@ -1584,27 +1646,44 @@ jobs:
           # ============================================================
           # 最终成功判断
           # ============================================================
+
+          # 没有生成 Image / Image.lz4
+          # 无论 OPPO 外层脚本是不是返回 0，都判定为失败
           if [ -z "$IMAGE" ] && [ -z "$IMAGE_LZ4" ]; then
+
             echo ""
             echo "❌ 内核没有生成 Image / Image.lz4"
             echo "请查看后面的 Show Kernel Build Error 步骤"
+
             exit 1
+
           fi
 
+          # 官方脚本明确返回失败
           if [ "$BUILD_STATUS" -ne 0 ]; then
+
             echo ""
-            echo "❌ 官方构建脚本返回错误: $BUILD_STATUS"
+            echo "❌ 官方构建脚本返回错误:"
+            echo "$BUILD_STATUS"
+
             echo "请查看后面的 Show Kernel Build Error 步骤"
+
             exit "$BUILD_STATUS"
+
           fi
 
           echo ""
           echo "✅ 内核编译成功"
 
           echo "=== 最终内核文件 ==="
+
           find ./kernel_platform/out \
             -type f \
-            \( -name "Image" -o -name "Image.lz4" -o -name "vmlinux" \) \
+            \( \
+              -name "Image" \
+              -o -name "Image.lz4" \
+              -o -name "vmlinux" \
+            \) \
             -print 2>/dev/null || true
 
       - name: Show Kernel Build Error

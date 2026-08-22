@@ -1475,12 +1475,7 @@ jobs:
           #   BTFIDS vmlinux
           #   FAILED unresolved symbol xdp_buff
           #
-          # resolve_btfids 要求 BTF 中存在 struct xdp_buff，
-          # 但当前 Android 12 / Linux 5.10 构建中该类型被丢掉。
-          #
-          # 新增一个很小的编译单元，通过 BTF_TYPE_EMIT()
-          # 强制 Clang 把 struct xdp_buff 写入 DWARF，
-          # 再由 pahole 写入最终 BTF。
+          # 强制 struct xdp_buff 出现在 DWARF/BTF 中。
           # ============================================================
           echo "=== Force emit BTF type: struct xdp_buff ==="
 
@@ -1493,37 +1488,28 @@ jobs:
           KERNEL_MAKEFILE="$COMMON_DIR/kernel/Makefile"
 
           # ------------------------------------------------------------
-          # 检查内核源码
+          # 检查源码文件
           # ------------------------------------------------------------
           if [ ! -f "$XDP_HEADER" ]; then
-
             echo "❌ 找不到:"
             echo "$XDP_HEADER"
-
             exit 1
-
           fi
 
           if [ ! -f "$BTF_HEADER" ]; then
-
             echo "❌ 找不到:"
             echo "$BTF_HEADER"
-
             exit 1
-
           fi
 
           if [ ! -f "$KERNEL_MAKEFILE" ]; then
-
             echo "❌ 找不到:"
             echo "$KERNEL_MAKEFILE"
-
             exit 1
-
           fi
 
           # ------------------------------------------------------------
-          # 确认 struct xdp_buff 确实存在
+          # 确认 struct xdp_buff 存在
           # ------------------------------------------------------------
           if ! grep -qE 'struct[[:space:]]+xdp_buff' "$XDP_HEADER"; then
 
@@ -1538,18 +1524,19 @@ jobs:
 
           echo "✅ 找到 struct xdp_buff"
 
-          grep -n "struct xdp_buff" "$XDP_HEADER" | head -n 10 || true
+          grep -n "struct xdp_buff" \
+            "$XDP_HEADER" \
+            | head -n 10 \
+            || true
 
           # ------------------------------------------------------------
-          # 确认当前 5.10 内核支持 BTF_TYPE_EMIT
+          # 确认 BTF_TYPE_EMIT 存在
           # ------------------------------------------------------------
           if ! grep -Rq "BTF_TYPE_EMIT" \
             "$COMMON_DIR/include" \
             2>/dev/null; then
 
             echo "❌ 当前内核源码中找不到 BTF_TYPE_EMIT"
-            echo "不能安全应用 xdp_buff BTF emit 修复"
-
             exit 1
 
           fi
@@ -1559,11 +1546,22 @@ jobs:
           grep -Rn "define BTF_TYPE_EMIT" \
             "$COMMON_DIR/include" \
             2>/dev/null \
-            | head -n 5 || true
+            | head -n 5 \
+            || true
 
-          # ------------------------------------------------------------
-          # 创建专门用于强制生成 BTF 类型的 C 文件
-          # ------------------------------------------------------------
+          # ============================================================
+          # 创建 BTF emit 源文件
+          #
+          # 注意：
+          # Android 12 / Linux 5.10 的 linux/btf.h
+          # 会使用 struct seq_file 和 struct bpf_prog，
+          # 但部分老内核没有提前声明。
+          #
+          # Clang 开启 -Werror,-Wvisibility 后会直接失败。
+          #
+          # 所以这里必须先 forward declare，
+          # 再 include linux/btf.h。
+          # ============================================================
           cat > "$BTF_EMIT_C" <<'EOF'
           // SPDX-License-Identifier: GPL-2.0
           /*
@@ -1576,6 +1574,14 @@ jobs:
            */
 
           #include <linux/compiler.h>
+
+          /*
+           * Required before including linux/btf.h on this Android 12
+           * Linux 5.10 tree when Clang builds with -Werror,-Wvisibility.
+           */
+          struct seq_file;
+          struct bpf_prog;
+
           #include <linux/btf.h>
           #include <net/xdp.h>
 
@@ -1590,8 +1596,6 @@ jobs:
 
           # ------------------------------------------------------------
           # 加入 kernel/Makefile
-          #
-          # 只有 CONFIG_DEBUG_INFO_BTF=y 时才编译
           # ------------------------------------------------------------
           if ! grep -qF 'btf_xdp_buff_emit.o' "$KERNEL_MAKEFILE"; then
 
@@ -1614,11 +1618,8 @@ jobs:
           # 修复 Android 12 / Kernel 5.10 host 构建环境
           #
           # 1. clang-12 链接 resolve_btfids 时寻找名为 ld 的链接器
-          #
-          # 2. OPPO / Android build 脚本重置 PATH，
-          #    导致 dd / printf 无法找到
-          #
-          # 所以把工具放进 Android 构建自己会加入 PATH 的目录。
+          # 2. OPPO / Android build 脚本会重置 PATH
+          # 3. 导致 dd / printf 无法找到
           # ============================================================
           echo "=== Fix host build tools ==="
 
@@ -1646,12 +1647,7 @@ jobs:
 
           mkdir -p "$BUILD_TOOLS_BIN"
 
-          # ------------------------------------------------------------
-          # clang-12 默认调用名为 ld 的链接器
-          #
-          # 使用 Android 自己的 ld.lld，
-          # 不使用系统 GNU ld。
-          # ------------------------------------------------------------
+          # clang-12 默认寻找名为 ld 的链接器
           ln -sf "$LLD_BIN" "$BUILD_TOOLS_BIN/ld"
 
           # ------------------------------------------------------------
@@ -1692,18 +1688,11 @@ jobs:
           echo "=== Tool versions ==="
 
           "$BUILD_TOOLS_BIN/ld" --version | head -n 1
-
           "$BUILD_TOOLS_BIN/dd" --version | head -n 1
-
-          "$BUILD_TOOLS_BIN/printf" --version \
-            | head -n 1 \
-            || true
+          "$BUILD_TOOLS_BIN/printf" --version | head -n 1 || true
 
           # ============================================================
           # 保存完整编译日志
-          #
-          # 不把几百万行编译输出直接打到 GitHub Actions 页面，
-          # 防止真正的错误被截断。
           # ============================================================
           BUILD_LOG="$GITHUB_WORKSPACE/kernel-build.log"
           STATUS_FILE="$GITHUB_WORKSPACE/kernel-build-status.txt"
@@ -1712,7 +1701,6 @@ jobs:
           rm -f "$STATUS_FILE"
 
           echo "=== 开始内核编译 ==="
-
           echo "完整日志保存到:"
           echo "$BUILD_LOG"
 
@@ -1771,7 +1759,7 @@ jobs:
           set -e
 
           # ============================================================
-          # 保存官方脚本退出码
+          # 保存构建退出码
           # ============================================================
           echo "$BUILD_STATUS" > "$STATUS_FILE"
 
@@ -1779,12 +1767,8 @@ jobs:
           echo "$BUILD_STATUS"
 
           # ============================================================
-          # 检查真正的内核产物
-          #
-          # OPPO 外层脚本可能吞掉内部 make 错误，
-          # 所以不能只相信 BUILD_STATUS。
+          # 检查真正的编译产物
           # ============================================================
-
           IMAGE=$(find ./kernel_platform/out \
             -type f \
             -name "Image" \
@@ -1806,36 +1790,23 @@ jobs:
           echo "=== 编译产物 ==="
 
           echo "Image     = ${IMAGE:-未找到}"
-
           echo "Image.lz4 = ${IMAGE_LZ4:-未找到}"
-
           echo "vmlinux   = ${VMLINUX:-未找到}"
 
           # ============================================================
           # 最终成功判断
           # ============================================================
-
-          # ------------------------------------------------------------
-          # 无 Image / Image.lz4
-          #
-          # 即使 OPPO build 脚本返回 0，
-          # 也说明实际内核编译失败。
-          # ------------------------------------------------------------
           if [ -z "$IMAGE" ] && [ -z "$IMAGE_LZ4" ]; then
 
             echo ""
 
             echo "❌ 内核没有生成 Image / Image.lz4"
-
             echo "请查看后面的 Show Kernel Build Error 步骤"
 
             exit 1
 
           fi
 
-          # ------------------------------------------------------------
-          # 官方脚本明确返回错误
-          # ------------------------------------------------------------
           if [ "$BUILD_STATUS" -ne 0 ]; then
 
             echo ""
@@ -1875,9 +1846,7 @@ jobs:
           if [ -f "$STATUS_FILE" ]; then
 
             echo "=== Kernel build exit code ==="
-
             cat "$STATUS_FILE"
-
             echo ""
 
           fi
@@ -1885,7 +1854,6 @@ jobs:
           if [ ! -f "$LOG" ]; then
 
             echo "⚠️ kernel-build.log 不存在"
-
             exit 0
 
           fi
@@ -1893,7 +1861,7 @@ jobs:
           echo "================ 关键错误 ================="
 
           grep -nEi \
-            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|Segmentation fault|Killed' \
+            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|seq_file|bpf_prog|Segmentation fault|Killed' \
             "$LOG" \
             | tail -n 150 \
             || true

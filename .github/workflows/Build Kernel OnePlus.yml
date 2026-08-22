@@ -1903,6 +1903,7 @@ jobs:
           echo "================ 最后 300 行 ================"
 
           tail -n 300 "$LOG" || true
+
       - name: Upload Kernel Build Log
         if: always()
         uses: actions/upload-artifact@v4

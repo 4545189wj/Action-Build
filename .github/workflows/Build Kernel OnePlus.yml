@@ -1432,6 +1432,37 @@ jobs:
 
           export PAHOLE=/usr/local/bin/pahole
 
+          # ============================================================
+          # 修复 Android 12 / 5.10 构建环境中 clang-12 找不到 ld
+          # ============================================================
+          echo "=== Fix host linker for resolve_btfids ==="
+
+          BUILD_TOOLS_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/build/build-tools/path/linux-x86"
+
+          LLD_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
+            -type f \
+            -path "*/clang/host/linux-x86/*/bin/ld.lld" \
+            -perm -111 \
+            | head -n 1)
+
+          if [ -z "$LLD_BIN" ]; then
+            echo "❌ 找不到 Android Clang 自带的 ld.lld"
+            exit 1
+          fi
+
+          echo "✅ 找到 ld.lld: $LLD_BIN"
+
+          mkdir -p "$BUILD_TOOLS_BIN"
+          ln -sf "$LLD_BIN" "$BUILD_TOOLS_BIN/ld"
+
+          echo "✅ ld alias:"
+          ls -l "$BUILD_TOOLS_BIN/ld"
+          "$BUILD_TOOLS_BIN/ld" --version | head -n 1
+
+          # ============================================================
+          # 开始官方构建
+          # ============================================================
+
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
             ./kernel_platform/oplus/bazel/oplus_modules_variant.sh \
               "${{ env.CPUD }}" "${{ env.BUILD_METHOD }}"

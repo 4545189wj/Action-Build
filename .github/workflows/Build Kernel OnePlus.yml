@@ -1099,7 +1099,11 @@ jobs:
             set_config "CONFIG_NETFILTER_XT_TARGET_REJECT=y"
             set_config "CONFIG_NETFILTER_XT_TARGET_LOG=y"
             set_config "CONFIG_NETFILTER_XT_MATCH_RECENT=y"
+            set_config "CONFIG_DEBUG_INFO=y"
             set_config "CONFIG_DEBUG_INFO_BTF=y"
+            set_config "CONFIG_DEBUG_INFO_DWARF4=y"
+            set_config "CONFIG_DEBUG_INFO_DWARF5=n"
+            set_config "CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=n"
           fi
 
           # IPSET & IPv6_NAT & TTL配置*
@@ -1388,71 +1392,67 @@ jobs:
           make -j"$(nproc --all)" O=out "${MAKE_ARGS[@]}"
           ccache -s
 
+      - name: Install newer pahole
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            build-essential \
+            libelf-dev \
+            libdw-dev \
+            zlib1g-dev \
+            pkg-config
+
+          git clone https://git.kernel.org/pub/scm/devel/pahole/pahole.git \
+            --branch v1.27 \
+            --depth=1 \
+            --recurse-submodules \
+            /tmp/pahole
+
+          cmake -S /tmp/pahole -B /tmp/pahole/build \
+            -DCMAKE_BUILD_TYPE=Release
+
+          cmake --build /tmp/pahole/build -j"$(nproc)"
+
+          sudo install -m755 /tmp/pahole/build/pahole /usr/local/bin/pahole
+
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+
+          /usr/local/bin/pahole --version
+
       - name: Fallback to Build Kernel
         if: ${{ github.event.inputs.FAST_BUILD == 'false' || steps.fast_build.outputs.fallback == 'true' }}
-        env:
-          PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
         run: |
-          # --- 关键修复：安装链接器 ---
-          sudo apt-get update
-          sudo apt-get install -y binutils
-          sudo apt-get install -y dwarves
-          which ld
-
           cd kernel_workspace
 
-          # ★ 强制修改 resolve_btfids Makefile，指定绝对路径链接器
-          RESOLVE_MAKEFILE="kernel_platform/common/tools/bpf/resolve_btfids/Makefile"
-          # 若存在 HOSTLD 或 LD 定义，替换为绝对路径；否则追加
-          sed -i 's/^HOSTLD\s*=\s*.*/HOSTLD = \/usr\/bin\/ld/' "$RESOLVE_MAKEFILE" 2>/dev/null || true
-          sed -i 's/^LD\s*=\s*.*/LD = \/usr\/bin\/ld/' "$RESOLVE_MAKEFILE" 2>/dev/null || true
-          # 强制添加 -fuse-ld 到 HOSTLDFLAGS 和 LDFLAGS
-          sed -i 's/^HOSTLDFLAGS\s*=\s*.*/HOSTLDFLAGS = -fuse-ld=\/usr\/bin\/ld/' "$RESOLVE_MAKEFILE" 2>/dev/null || true
-          sed -i 's/^LDFLAGS\s*=\s*.*/LDFLAGS = -fuse-ld=\/usr\/bin\/ld/' "$RESOLVE_MAKEFILE" 2>/dev/null || true
-          # 如果未定义，则在文件末尾追加
-          grep -q '^HOSTLD' "$RESOLVE_MAKEFILE" || echo 'HOSTLD = /usr/bin/ld' >> "$RESOLVE_MAKEFILE"
-          grep -q '^LD' "$RESOLVE_MAKEFILE" || echo 'LD = /usr/bin/ld' >> "$RESOLVE_MAKEFILE"
-          grep -q '^HOSTLDFLAGS' "$RESOLVE_MAKEFILE" || echo 'HOSTLDFLAGS = -fuse-ld=/usr/bin/ld' >> "$RESOLVE_MAKEFILE"
-          grep -q '^LDFLAGS' "$RESOLVE_MAKEFILE" || echo 'LDFLAGS = -fuse-ld=/usr/bin/ld' >> "$RESOLVE_MAKEFILE"
+          mkdir -p "out/target/product/${{ env.CPUD }}"
 
-          # --- 验证 Makefile 修改（可选，保留以便调试） ---
-          echo "=== 验证 libbpf Makefile 修改 ==="
-          grep -n "elfdep" kernel_platform/common/tools/lib/bpf/Makefile || echo "elfdep not found"
-          grep -n "LIBELF_LIBS" kernel_platform/common/tools/lib/bpf/Makefile || echo "LIBELF_LIBS not found"
-          echo "=== 验证 resolve_btfids Makefile 修改 ==="
-          grep -n "LIBELF_LIBS" kernel_platform/common/tools/bpf/resolve_btfids/Makefile || echo "LIBELF_LIBS not found"
-          echo "=== 验证链接器变量 ==="
-          grep -E "^(HOSTLD|LD|HOSTLDFLAGS|LDFLAGS)\s*=" kernel_platform/common/tools/bpf/resolve_btfids/Makefile || echo "No linker vars"
+          echo "=== BTF tool ==="
+          /usr/local/bin/pahole --version
 
-          # --- 执行原编译命令（使用 env 强制覆盖） ---
+          export PAHOLE=/usr/local/bin/pahole
+
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
-            ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
-            ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
+            ./kernel_platform/oplus/bazel/oplus_modules_variant.sh \
+              "${{ env.CPUD }}" "${{ env.BUILD_METHOD }}"
+
+            PAHOLE=/usr/local/bin/pahole \
+              ./kernel_platform/build_with_bazel.py \
+              -t "${{ env.CPUD }}" "${{ env.BUILD_METHOD }}"
           else
-            env LD=/usr/bin/ld LDFLAGS="-fuse-ld=/usr/bin/ld" \
-                HOSTLD=/usr/bin/ld HOSTLDFLAGS="-fuse-ld=/usr/bin/ld" \
-                LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
-                ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} ${{ env.BUILD_METHOD }}
-          fi
-          echo "=== 输出目录内容 (深度3) ==="
-          find ./kernel_workspace/kernel_platform/out -type f -name "*Image*" -ls 2>/dev/null || echo "无 Image 相关文件"
-          echo "=== vmlinux 文件 ==="
-          find ./kernel_workspace -name "vmlinux" -ls 2>/dev/null || echo "无 vmlinux"
-          echo "==================== 真实全盘查找 vmlinux ===================="
-          find ./kernel_workspace -type f -name "vmlinux" -print 2>&1 | head -20
-          if [ $(find ./kernel_workspace -type f -name "vmlinux" 2>/dev/null | wc -l) -gt 0 ]; then
-              echo ">>>>> vmlinux 文件存在"
-          else
-              echo ">>>>> 全盘 find：没有找到 vmlinux"
+            PAHOLE=/usr/local/bin/pahole \
+            LTO=thin \
+            SYSTEM_DLKM_RE_SIGN=0 \
+            BUILD_SYSTEM_DLKM=0 \
+            KMI_SYMBOL_LIST_STRICT_MODE=0 \
+              ./kernel_platform/oplus/build/oplus_build_kernel.sh \
+              "${{ env.CPUD }}" "${{ env.BUILD_METHOD }}"
           fi
 
-          echo "==================== 真实全盘查找 Image / Image.lz4 ===================="
-          find ./kernel_workspace -type f \( -name "Image" -o -name "Image.lz4" \) -print 2>&1 | head -20
-          if [ $(find ./kernel_workspace -type f \( -name "Image" -o -name "Image.lz4" \) 2>/dev/null | wc -l) -gt 0 ]; then
-              echo ">>>>> Image 镜像文件存在"
-          else
-              echo ">>>>> 全盘 find：没有找到 Image 或 Image.lz4"
-          fi
+          echo "=== 检查输出 ==="
+          find ./kernel_platform/out -type f \
+            \( -name "Image" -o -name "Image.lz4" -o -name "vmlinux" \) \
+            -print 2>/dev/null || true
 
       - name: Make AnyKernel3
         run: |

@@ -1429,9 +1429,13 @@ jobs:
 
           echo "=== BTF tool ==="
           /usr/local/bin/pahole --version
-
           export PAHOLE=/usr/local/bin/pahole
 
+          # ============================================================
+          # 修复 Android 12 / 5.10：
+          # clang-12 链接 resolve_btfids 时找不到名为 ld 的链接器
+          # 使用 Android Clang 自带的 ld.lld，不使用系统 GNU ld
+          # ============================================================
           echo "=== Fix host linker for resolve_btfids ==="
 
           BUILD_TOOLS_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/build/build-tools/path/linux-x86"
@@ -1447,36 +1451,155 @@ jobs:
             exit 1
           fi
 
-          echo "✅ 找到 ld.lld: $LLD_BIN"
+          echo "✅ 找到 ld.lld:"
+          echo "$LLD_BIN"
 
           mkdir -p "$BUILD_TOOLS_BIN"
+
+          # clang-12 默认会调用 "ld"
           ln -sf "$LLD_BIN" "$BUILD_TOOLS_BIN/ld"
 
-          echo "✅ ld alias:"
+          echo "=== ld alias ==="
           ls -l "$BUILD_TOOLS_BIN/ld"
           "$BUILD_TOOLS_BIN/ld" --version | head -n 1
 
-          if [ -f ./kernel_platform/build_with_bazel.py ]; then
-            ./kernel_platform/oplus/bazel/oplus_modules_variant.sh \
-              "${{ env.CPUD }}" "${{ env.BUILD_METHOD }}"
+          # ============================================================
+          # 编译日志只保存到文件
+          # 避免 GitHub Actions 页面被几万行日志截断
+          # ============================================================
+          BUILD_LOG="$GITHUB_WORKSPACE/kernel-build.log"
+          STATUS_FILE="$GITHUB_WORKSPACE/kernel-build-status.txt"
 
-            PAHOLE=/usr/local/bin/pahole \
-              ./kernel_platform/build_with_bazel.py \
-              -t "${{ env.CPUD }}" "${{ env.BUILD_METHOD }}"
+          rm -f "$BUILD_LOG" "$STATUS_FILE"
+
+          echo "=== 开始内核编译 ==="
+          echo "完整日志保存到: $BUILD_LOG"
+
+          set +e
+
+          if [ -f ./kernel_platform/build_with_bazel.py ]; then
+
+            (
+              ./kernel_platform/oplus/bazel/oplus_modules_variant.sh \
+                "${{ env.CPUD }}" \
+                "${{ env.BUILD_METHOD }}" && \
+
+              PAHOLE=/usr/local/bin/pahole \
+                ./kernel_platform/build_with_bazel.py \
+                -t "${{ env.CPUD }}" \
+                "${{ env.BUILD_METHOD }}"
+            ) > "$BUILD_LOG" 2>&1
+
+            BUILD_STATUS=$?
+
           else
+
             PAHOLE=/usr/local/bin/pahole \
             LTO=thin \
             SYSTEM_DLKM_RE_SIGN=0 \
             BUILD_SYSTEM_DLKM=0 \
             KMI_SYMBOL_LIST_STRICT_MODE=0 \
               ./kernel_platform/oplus/build/oplus_build_kernel.sh \
-              "${{ env.CPUD }}" "${{ env.BUILD_METHOD }}"
+              "${{ env.CPUD }}" \
+              "${{ env.BUILD_METHOD }}" \
+              > "$BUILD_LOG" 2>&1
+
+            BUILD_STATUS=$?
+
           fi
 
-          echo "=== 检查输出 ==="
-          find ./kernel_platform/out -type f \
+          set -e
+
+          echo "$BUILD_STATUS" > "$STATUS_FILE"
+
+          echo "=== 官方编译脚本退出码: $BUILD_STATUS ==="
+
+          # ============================================================
+          # 检查真正的编译结果
+          # 不能只相信 OPPO 脚本的退出码
+          # ============================================================
+          IMAGE=$(find ./kernel_platform/out \
+            -type f \
+            -name "Image" \
+            2>/dev/null | head -n 1)
+
+          IMAGE_LZ4=$(find ./kernel_platform/out \
+            -type f \
+            -name "Image.lz4" \
+            2>/dev/null | head -n 1)
+
+          VMLINUX=$(find ./kernel_platform/out \
+            -type f \
+            -name "vmlinux" \
+            2>/dev/null | head -n 1)
+
+          echo "=== 编译产物 ==="
+          echo "Image     = ${IMAGE:-未找到}"
+          echo "Image.lz4 = ${IMAGE_LZ4:-未找到}"
+          echo "vmlinux   = ${VMLINUX:-未找到}"
+
+          # ============================================================
+          # OPPO 脚本有可能内部 make 已失败，但最后仍返回 0
+          # 因此以 Image / Image.lz4 是否存在作为最终判断之一
+          # ============================================================
+          if [ -z "$IMAGE" ] && [ -z "$IMAGE_LZ4" ]; then
+            echo "❌ 内核没有生成 Image / Image.lz4"
+            echo "请查看后面的 Show Kernel Build Error 步骤"
+            exit 1
+          fi
+
+          if [ "$BUILD_STATUS" -ne 0 ]; then
+            echo "❌ 官方构建脚本返回错误: $BUILD_STATUS"
+            echo "请查看后面的 Show Kernel Build Error 步骤"
+            exit "$BUILD_STATUS"
+          fi
+
+          echo "✅ 内核编译成功"
+
+          echo "=== 最终内核文件 ==="
+          find ./kernel_platform/out \
+            -type f \
             \( -name "Image" -o -name "Image.lz4" -o -name "vmlinux" \) \
             -print 2>/dev/null || true
+
+      - name: Show Kernel Build Error
+        if: always()
+        run: |
+          LOG="$GITHUB_WORKSPACE/kernel-build.log"
+          STATUS_FILE="$GITHUB_WORKSPACE/kernel-build-status.txt"
+
+          if [ -f "$STATUS_FILE" ]; then
+            echo "=== Kernel build exit code ==="
+            cat "$STATUS_FILE"
+            echo ""
+          fi
+
+          if [ ! -f "$LOG" ]; then
+            echo "⚠️ kernel-build.log 不存在"
+            exit 0
+          fi
+
+          echo "================ 关键错误 ================="
+
+          grep -nEi \
+            'error:|fatal:|undefined reference|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|pahole|resolve_btfids|Segmentation fault|Killed' \
+            "$LOG" \
+            | tail -n 150 || true
+
+          echo ""
+          echo "================ 最后 300 行 ================"
+
+          tail -n 300 "$LOG" || true
+
+      - name: Upload Kernel Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-log
+          path: |
+            kernel-build.log
+            kernel-build-status.txt
+          if-no-files-found: ignore
 
       - name: Make AnyKernel3
         run: |

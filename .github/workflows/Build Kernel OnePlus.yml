@@ -1431,7 +1431,7 @@ jobs:
           # BTF / pahole
           #
           # 优先使用 Android 源码树自带的 pahole。
-          # 如果找不到，再 fallback 到 /usr/local/bin/pahole 1.27。
+          # 找不到时再 fallback 到 /usr/local/bin/pahole 1.27。
           # ============================================================
           echo "=== Detect BTF tool ==="
 
@@ -1476,8 +1476,9 @@ jobs:
           #
           #   FAILED unresolved symbol xdp_buff
           #   FAILED unresolved symbol udp_sock
+          #   FAILED unresolved symbol udp6_sock
           #
-          # 强制把这些类型写入 DWARF/BTF。
+          # 强制把这些类型写入 DWARF / BTF。
           # ============================================================
           echo "=== Force emit required BTF types ==="
 
@@ -1491,7 +1492,7 @@ jobs:
           KERNEL_MAKEFILE="$COMMON_DIR/kernel/Makefile"
 
           # ============================================================
-          # 检查源码文件
+          # 检查基础源码文件
           # ============================================================
           if [ ! -f "$XDP_HEADER" ]; then
 
@@ -1506,15 +1507,6 @@ jobs:
 
             echo "❌ 找不到:"
             echo "$UDP_HEADER"
-
-            echo "=== 搜索 struct udp_sock ==="
-
-            grep -RnsE \
-              'struct[[:space:]]+udp_sock' \
-              "$COMMON_DIR/include" \
-              2>/dev/null \
-              | head -n 20 \
-              || true
 
             exit 1
 
@@ -1542,7 +1534,7 @@ jobs:
           # 确认 struct xdp_buff
           # ============================================================
           if ! grep -qE \
-            'struct[[:space:]]+xdp_buff' \
+            'struct[[:space:]]+xdp_buff[[:space:]]*\{' \
             "$XDP_HEADER"; then
 
             echo "❌ include/net/xdp.h 中没有找到 struct xdp_buff"
@@ -1568,7 +1560,7 @@ jobs:
           # 确认 struct udp_sock
           # ============================================================
           if ! grep -qE \
-            'struct[[:space:]]+udp_sock' \
+            'struct[[:space:]]+udp_sock[[:space:]]*\{' \
             "$UDP_HEADER"; then
 
             echo "❌ include/linux/udp.h 中没有找到 struct udp_sock"
@@ -1576,7 +1568,7 @@ jobs:
             echo "=== 搜索 struct udp_sock ==="
 
             grep -RnsE \
-              'struct[[:space:]]+udp_sock' \
+              'struct[[:space:]]+udp_sock[[:space:]]*\{' \
               "$COMMON_DIR/include" \
               2>/dev/null \
               | head -n 20 \
@@ -1591,6 +1583,50 @@ jobs:
           grep -n \
             "struct udp_sock" \
             "$UDP_HEADER" \
+            | head -n 10 \
+            || true
+
+          # ============================================================
+          # 自动查找 struct udp6_sock 所在头文件
+          #
+          # 不硬编码路径，避免不同 5.10 内核树定义位置不同。
+          # ============================================================
+          echo "=== Search struct udp6_sock ==="
+
+          UDP6_HEADER=$(grep -RslE \
+            'struct[[:space:]]+udp6_sock[[:space:]]*\{' \
+            "$COMMON_DIR/include" \
+            2>/dev/null \
+            | head -n 1)
+
+          if [ -z "$UDP6_HEADER" ]; then
+
+            echo "❌ 找不到 struct udp6_sock 的定义"
+
+            echo "=== udp6_sock 搜索结果 ==="
+
+            grep -Rns \
+              "udp6_sock" \
+              "$COMMON_DIR/include" \
+              2>/dev/null \
+              | head -n 30 \
+              || true
+
+            exit 1
+
+          fi
+
+          UDP6_HEADER_REL="${UDP6_HEADER#$COMMON_DIR/include/}"
+
+          echo "✅ 找到 struct udp6_sock:"
+          echo "$UDP6_HEADER"
+
+          echo "✅ include 路径:"
+          echo "$UDP6_HEADER_REL"
+
+          grep -n \
+            "struct udp6_sock" \
+            "$UDP6_HEADER" \
             | head -n 10 \
             || true
 
@@ -1620,13 +1656,16 @@ jobs:
           # ============================================================
           # 创建 BTF emit 源文件
           #
-          # linux/btf.h 在这个 Android 12 / Linux 5.10 树中
-          # 对 struct seq_file 和 struct bpf_prog 的声明不完整。
+          # 注意：
+          # linux/btf.h 在这个 Android 12 / Linux 5.10 内核中
+          # 对 struct seq_file / struct bpf_prog 的声明不完整。
           #
-          # Clang 使用 -Werror,-Wvisibility 时会直接报错，
-          # 所以先做 forward declaration。
+          # 所以必须先 forward declare。
+          #
+          # 这里使用非单引号 heredoc，
+          # 是为了展开 ${UDP6_HEADER_REL}。
           # ============================================================
-          cat > "$BTF_EMIT_C" <<'EOF'
+          cat > "$BTF_EMIT_C" <<EOF
           // SPDX-License-Identifier: GPL-2.0
           /*
            * Force required kernel types into DWARF/BTF.
@@ -1636,6 +1675,7 @@ jobs:
            *   BTFIDS  vmlinux
            *   FAILED unresolved symbol xdp_buff
            *   FAILED unresolved symbol udp_sock
+           *   FAILED unresolved symbol udp6_sock
            */
 
           #include <linux/compiler.h>
@@ -1659,10 +1699,18 @@ jobs:
            */
           #include <linux/udp.h>
 
+          /*
+           * struct udp6_sock
+           *
+           * Header detected automatically by workflow.
+           */
+          #include <${UDP6_HEADER_REL}>
+
           static __used noinline void btf_force_emit_required_types(void)
           {
               BTF_TYPE_EMIT(struct xdp_buff);
               BTF_TYPE_EMIT(struct udp_sock);
+              BTF_TYPE_EMIT(struct udp6_sock);
           }
           EOF
 
@@ -1702,9 +1750,7 @@ jobs:
           # 修复 Android 12 / Kernel 5.10 host 构建环境
           #
           # 1. clang-12 链接 resolve_btfids 时寻找 ld
-          #
-          # 2. OPPO / Android build 会重置 PATH
-          #
+          # 2. Android / OPPO build 会重置 PATH
           # 3. 导致 dd / printf 找不到
           # ============================================================
           echo "=== Fix host build tools ==="
@@ -1712,7 +1758,7 @@ jobs:
           BUILD_TOOLS_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/build/build-tools/path/linux-x86"
 
           # ============================================================
-          # 找 Android Clang 自带 ld.lld
+          # 找 Android Clang 自带的 ld.lld
           # ============================================================
           LLD_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
             -type f \
@@ -1869,14 +1915,13 @@ jobs:
             > "$STATUS_FILE"
 
           echo "=== 官方构建脚本退出码 ==="
-
           echo "$BUILD_STATUS"
 
           # ============================================================
           # 检查真正的编译产物
           #
           # OPPO 外层脚本可能吞掉内部 make 错误，
-          # 所以不能只看 BUILD_STATUS。
+          # 因此不能只相信 BUILD_STATUS。
           # ============================================================
           IMAGE=$(find ./kernel_platform/out \
             -type f \
@@ -1977,7 +2022,7 @@ jobs:
           echo "================ 关键错误 ================="
 
           grep -nEi \
-            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
+            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
             "$LOG" \
             | tail -n 150 \
             || true

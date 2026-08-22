@@ -1458,18 +1458,49 @@ jobs:
         run: |
           git clone https://github.com/Numbersf/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
-          mkdir -p kernel_workspace/kernel_platform/out/Final-Image-Find/
 
-          # 直接全盘搜索 Image
+          OUT_DIR="kernel_workspace/kernel_platform/out/Final-Image-Find"
+          mkdir -p "$OUT_DIR"
+
+          echo "=== 查找裸 Image ==="
           image_path=$(find ./kernel_workspace -type f -name "Image" | head -n 1)
-          if [ -z "$image_path" ]; then
-            echo "❌ 未找到 Image 文件" >&2
-            exit 1
+
+          if [ -n "$image_path" ]; then
+            echo "✅ 找到 Image: $image_path"
+
+            cp "$image_path" ./AnyKernel3/Image
+            cp "$image_path" "$OUT_DIR/Image"
+
+          else
+            echo "=== 未找到裸 Image，继续查找 Image.lz4 ==="
+
+            image_lz4=$(find ./kernel_workspace -type f -name "Image.lz4" | head -n 1)
+
+            if [ -n "$image_lz4" ]; then
+              echo "✅ 找到 Image.lz4: $image_lz4"
+
+              # 解压成裸 Image
+              lz4 -d "$image_lz4" ./AnyKernel3/Image
+
+              # 保存一份最终 Image
+              cp ./AnyKernel3/Image "$OUT_DIR/Image"
+
+              echo "✅ Image.lz4 已解压为 Image"
+
+            else
+              echo "❌ Image 和 Image.lz4 都没有找到"
+
+              echo "=== 输出可能相关的文件 ==="
+              find ./kernel_workspace -type f \
+                \( -name "Image*" -o -name "vmlinux*" \) \
+                -print 2>/dev/null | head -100
+
+              exit 1
+            fi
           fi
 
-          echo "✅ Image file located at: $image_path"
-          cp "$image_path" ./AnyKernel3/Image
-          cp "$image_path" kernel_workspace/kernel_platform/out/Final-Image-Find/Image
+          echo "=== 最终 AnyKernel3/Image ==="
+          ls -lh ./AnyKernel3/Image
 
       - name: Apply KPX and Replace Image
         if: ${{ github.event.inputs.KPM != 'N/A' }}

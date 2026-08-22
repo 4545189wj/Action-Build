@@ -1477,6 +1477,7 @@ jobs:
           #   FAILED unresolved symbol xdp_buff
           #   FAILED unresolved symbol udp_sock
           #   FAILED unresolved symbol udp6_sock
+          #   FAILED unresolved symbol tcp_timewait_sock
           #
           # 强制把这些类型写入 DWARF / BTF。
           # ============================================================
@@ -1531,7 +1532,7 @@ jobs:
           fi
 
           # ============================================================
-          # 确认 struct xdp_buff
+          # struct xdp_buff
           # ============================================================
           if ! grep -qE \
             'struct[[:space:]]+xdp_buff[[:space:]]*\{' \
@@ -1557,7 +1558,7 @@ jobs:
             || true
 
           # ============================================================
-          # 确认 struct udp_sock
+          # struct udp_sock
           # ============================================================
           if ! grep -qE \
             'struct[[:space:]]+udp_sock[[:space:]]*\{' \
@@ -1587,9 +1588,7 @@ jobs:
             || true
 
           # ============================================================
-          # 自动查找 struct udp6_sock 所在头文件
-          #
-          # 不硬编码路径，避免不同 5.10 内核树定义位置不同。
+          # 自动查找 struct udp6_sock
           # ============================================================
           echo "=== Search struct udp6_sock ==="
 
@@ -1631,6 +1630,48 @@ jobs:
             || true
 
           # ============================================================
+          # 自动查找 struct tcp_timewait_sock
+          # ============================================================
+          echo "=== Search struct tcp_timewait_sock ==="
+
+          TCP_TW_HEADER=$(grep -RslE \
+            'struct[[:space:]]+tcp_timewait_sock[[:space:]]*\{' \
+            "$COMMON_DIR/include" \
+            2>/dev/null \
+            | head -n 1)
+
+          if [ -z "$TCP_TW_HEADER" ]; then
+
+            echo "❌ 找不到 struct tcp_timewait_sock 的定义"
+
+            echo "=== tcp_timewait_sock 搜索结果 ==="
+
+            grep -Rns \
+              "tcp_timewait_sock" \
+              "$COMMON_DIR/include" \
+              2>/dev/null \
+              | head -n 30 \
+              || true
+
+            exit 1
+
+          fi
+
+          TCP_TW_HEADER_REL="${TCP_TW_HEADER#$COMMON_DIR/include/}"
+
+          echo "✅ 找到 struct tcp_timewait_sock:"
+          echo "$TCP_TW_HEADER"
+
+          echo "✅ include 路径:"
+          echo "$TCP_TW_HEADER_REL"
+
+          grep -n \
+            "struct tcp_timewait_sock" \
+            "$TCP_TW_HEADER" \
+            | head -n 10 \
+            || true
+
+          # ============================================================
           # 确认 BTF_TYPE_EMIT
           # ============================================================
           if ! grep -Rq \
@@ -1656,14 +1697,12 @@ jobs:
           # ============================================================
           # 创建 BTF emit 源文件
           #
-          # 注意：
-          # linux/btf.h 在这个 Android 12 / Linux 5.10 内核中
-          # 对 struct seq_file / struct bpf_prog 的声明不完整。
+          # linux/btf.h 在当前 Android 12 / Linux 5.10 内核中
+          # 对 struct seq_file / struct bpf_prog 的声明不完整，
+          # 所以必须提前 forward declare。
           #
-          # 所以必须先 forward declare。
-          #
-          # 这里使用非单引号 heredoc，
-          # 是为了展开 ${UDP6_HEADER_REL}。
+          # 这里使用可展开的 heredoc，
+          # 因为要插入自动检测到的头文件路径。
           # ============================================================
           cat > "$BTF_EMIT_C" <<EOF
           // SPDX-License-Identifier: GPL-2.0
@@ -1676,6 +1715,7 @@ jobs:
            *   FAILED unresolved symbol xdp_buff
            *   FAILED unresolved symbol udp_sock
            *   FAILED unresolved symbol udp6_sock
+           *   FAILED unresolved symbol tcp_timewait_sock
            */
 
           #include <linux/compiler.h>
@@ -1701,16 +1741,20 @@ jobs:
 
           /*
            * struct udp6_sock
-           *
-           * Header detected automatically by workflow.
            */
           #include <${UDP6_HEADER_REL}>
+
+          /*
+           * struct tcp_timewait_sock
+           */
+          #include <${TCP_TW_HEADER_REL}>
 
           static __used noinline void btf_force_emit_required_types(void)
           {
               BTF_TYPE_EMIT(struct xdp_buff);
               BTF_TYPE_EMIT(struct udp_sock);
               BTF_TYPE_EMIT(struct udp6_sock);
+              BTF_TYPE_EMIT(struct tcp_timewait_sock);
           }
           EOF
 
@@ -1785,7 +1829,7 @@ jobs:
             "$BUILD_TOOLS_BIN/ld"
 
           # ============================================================
-          # 检查 dd
+          # dd
           # ============================================================
           if [ ! -x /usr/bin/dd ]; then
 
@@ -1796,7 +1840,7 @@ jobs:
           fi
 
           # ============================================================
-          # 检查 printf
+          # printf
           # ============================================================
           if [ ! -x /usr/bin/printf ]; then
 
@@ -1921,7 +1965,7 @@ jobs:
           # 检查真正的编译产物
           #
           # OPPO 外层脚本可能吞掉内部 make 错误，
-          # 因此不能只相信 BUILD_STATUS。
+          # 所以不能只相信 BUILD_STATUS。
           # ============================================================
           IMAGE=$(find ./kernel_platform/out \
             -type f \
@@ -2022,7 +2066,7 @@ jobs:
           echo "================ 关键错误 ================="
 
           grep -nEi \
-            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
+            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
             "$LOG" \
             | tail -n 150 \
             || true

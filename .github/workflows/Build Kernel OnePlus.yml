@@ -1429,9 +1429,6 @@ jobs:
 
           # ============================================================
           # BTF / pahole
-          #
-          # 优先使用 Android 源码树自带 pahole。
-          # 找不到时 fallback 到 /usr/local/bin/pahole。
           # ============================================================
           echo "=== Detect BTF tool ==="
 
@@ -1465,37 +1462,38 @@ jobs:
           fi
 
           echo "=== pahole version ==="
+
           "$PAHOLE_BIN" --version
 
           export PAHOLE="$PAHOLE_BIN"
 
           # ============================================================
-          # 修复 BTFIDS unresolved symbol
+          # BTF required types
           #
           # 已遇到：
           #
-          #   FAILED unresolved symbol xdp_buff
-          #   FAILED unresolved symbol udp_sock
-          #   FAILED unresolved symbol udp6_sock
-          #   FAILED unresolved symbol tcp_timewait_sock
-          #   FAILED unresolved symbol tcp_sock
-          #   FAILED unresolved symbol tcp_request_sock
-          #   FAILED unresolved symbol tcp6_sock
-          #   FAILED unresolved symbol netlink_sock
+          #   xdp_buff
+          #   udp_sock
+          #   udp6_sock
+          #   tcp_timewait_sock
+          #   tcp_sock
+          #   tcp_request_sock
+          #   tcp6_sock
+          #   netlink_sock
           #
-          # 前 7 个普通 BTF_TYPE_EMIT 已验证有效。
+          # 这版对全部类型使用：
           #
-          # netlink_sock 比较特殊：
-          # 虽然 BTF_TYPE_EMIT 已加入，但最终 BTF 仍然缺失。
+          #   BTF_TYPE_EMIT
+          #   +
+          #   真实 struct 对象
+          #   +
+          #   sizeof
+          #   +
+          #   地址引用
+          #   +
+          #   -fstandalone-debug
           #
-          # 所以额外：
-          #
-          #   1. 创建真实 struct netlink_sock 对象
-          #   2. noinline 函数返回它的地址
-          #   3. sizeof(struct netlink_sock)
-          #   4. 对 helper 单独加 -fstandalone-debug
-          #
-          # 强制完整类型进入 DWARF/BTF。
+          # 防止 pahole 1.19 / DWARF 路径出现类型反复被裁剪。
           # ============================================================
           echo "=== Force emit required BTF types ==="
 
@@ -1509,7 +1507,7 @@ jobs:
           KERNEL_MAKEFILE="$COMMON_DIR/kernel/Makefile"
 
           # ============================================================
-          # 检查基础文件
+          # 基础文件检查
           # ============================================================
           if [ ! -f "$XDP_HEADER" ]; then
 
@@ -1548,7 +1546,7 @@ jobs:
           fi
 
           # ============================================================
-          # struct xdp_buff
+          # xdp_buff
           # ============================================================
           echo "=== Check struct xdp_buff ==="
 
@@ -1556,7 +1554,7 @@ jobs:
             'struct[[:space:]]+xdp_buff[[:space:]]*\{' \
             "$XDP_HEADER"; then
 
-            echo "❌ include/net/xdp.h 中没有找到 struct xdp_buff"
+            echo "❌ 找不到 struct xdp_buff"
 
             grep -n \
               "xdp_buff" \
@@ -1576,7 +1574,7 @@ jobs:
             || true
 
           # ============================================================
-          # struct udp_sock
+          # udp_sock
           # ============================================================
           echo "=== Check struct udp_sock ==="
 
@@ -1584,9 +1582,7 @@ jobs:
             'struct[[:space:]]+udp_sock[[:space:]]*\{' \
             "$UDP_HEADER"; then
 
-            echo "❌ include/linux/udp.h 中没有找到 struct udp_sock"
-
-            echo "=== 搜索 struct udp_sock ==="
+            echo "❌ 找不到 struct udp_sock"
 
             grep -RnsE \
               'struct[[:space:]]+udp_sock[[:space:]]*\{' \
@@ -1608,7 +1604,7 @@ jobs:
             || true
 
           # ============================================================
-          # struct udp6_sock
+          # udp6_sock
           # ============================================================
           echo "=== Search struct udp6_sock ==="
 
@@ -1648,7 +1644,7 @@ jobs:
             || true
 
           # ============================================================
-          # struct tcp_timewait_sock
+          # tcp_timewait_sock
           # ============================================================
           echo "=== Search struct tcp_timewait_sock ==="
 
@@ -1688,7 +1684,7 @@ jobs:
             || true
 
           # ============================================================
-          # struct tcp_sock
+          # tcp_sock
           # ============================================================
           echo "=== Check struct tcp_sock ==="
 
@@ -1697,8 +1693,6 @@ jobs:
             "$TCP_TW_HEADER"; then
 
             echo "❌ 当前 TCP 头文件中没有找到 struct tcp_sock"
-
-            echo "=== 搜索 struct tcp_sock ==="
 
             grep -RnsE \
               'struct[[:space:]]+tcp_sock[[:space:]]*\{' \
@@ -1720,7 +1714,7 @@ jobs:
             || true
 
           # ============================================================
-          # struct tcp_request_sock
+          # tcp_request_sock
           # ============================================================
           echo "=== Search struct tcp_request_sock ==="
 
@@ -1760,7 +1754,7 @@ jobs:
             || true
 
           # ============================================================
-          # struct tcp6_sock
+          # tcp6_sock
           # ============================================================
           echo "=== Search struct tcp6_sock ==="
 
@@ -1800,16 +1794,14 @@ jobs:
             || true
 
           # ============================================================
-          # struct netlink_sock
+          # netlink_sock
           #
-          # netlink_sock 是 Netlink 内部结构，
-          # 不保证在 common/include。
+          # 它是内部 Netlink struct，
+          # 当前源码中已验证位于：
           #
-          # 已验证当前源码位置：
+          # common/net/netlink/af_netlink.h
           #
-          #   common/net/netlink/af_netlink.h
-          #
-          # 但仍然动态查找，避免硬编码。
+          # 仍然动态搜索整个 common。
           # ============================================================
           echo "=== Search struct netlink_sock ==="
 
@@ -1824,7 +1816,7 @@ jobs:
 
             echo "❌ 找不到 struct netlink_sock"
 
-            echo "=== netlink_sock 全源码搜索结果 ==="
+            echo "=== netlink_sock 搜索结果 ==="
 
             grep -Rns \
               "netlink_sock" \
@@ -1849,13 +1841,13 @@ jobs:
             || true
 
           # ============================================================
-          # 将 netlink_sock 内部头文件转换成相对于 common/kernel 的路径
+          # netlink internal header 相对路径
           #
-          # helper 位于：
+          # helper:
           #
           #   common/kernel/btf_xdp_buff_emit.c
           #
-          # 当前预期类似：
+          # 例如转换为：
           #
           #   ../net/netlink/af_netlink.h
           # ============================================================
@@ -1865,7 +1857,7 @@ jobs:
 
           if [ -z "$NETLINK_HEADER_REL" ]; then
 
-            echo "❌ 无法计算 netlink_sock 相对头文件路径"
+            echo "❌ 无法生成 netlink_sock 相对头文件路径"
 
             exit 1
 
@@ -1875,7 +1867,7 @@ jobs:
           echo "$NETLINK_HEADER_REL"
 
           # ============================================================
-          # 确认 BTF_TYPE_EMIT
+          # BTF_TYPE_EMIT
           # ============================================================
           echo "=== Check BTF_TYPE_EMIT ==="
 
@@ -1900,107 +1892,155 @@ jobs:
             || true
 
           # ============================================================
-          # 创建 BTF emit helper
-          #
-          # netlink_sock 使用比普通 BTF_TYPE_EMIT 更强的方式：
-          #
-          #   real object
-          #   noinline getter
-          #   sizeof
-          #   BTF_TYPE_EMIT
-          #   -fstandalone-debug
-          #
+          # 创建强制 BTF helper
           # ============================================================
           cat > "$BTF_EMIT_C" <<EOF
           // SPDX-License-Identifier: GPL-2.0
           /*
-           * Force required kernel types into DWARF/BTF.
+           * Force required types into DWARF/BTF.
            *
-           * Fix:
+           * Required by BTFIDS:
            *
-           *   BTFIDS  vmlinux
-           *   FAILED unresolved symbol xdp_buff
-           *   FAILED unresolved symbol udp_sock
-           *   FAILED unresolved symbol udp6_sock
-           *   FAILED unresolved symbol tcp_timewait_sock
-           *   FAILED unresolved symbol tcp_sock
-           *   FAILED unresolved symbol tcp_request_sock
-           *   FAILED unresolved symbol tcp6_sock
-           *   FAILED unresolved symbol netlink_sock
+           *   xdp_buff
+           *   udp_sock
+           *   udp6_sock
+           *   tcp_timewait_sock
+           *   tcp_sock
+           *   tcp_request_sock
+           *   tcp6_sock
+           *   netlink_sock
            */
 
           #include <linux/compiler.h>
 
-          /*
-           * Required before including linux/btf.h on this
-           * Android 12 / Linux 5.10 kernel tree.
-           */
           struct seq_file;
           struct bpf_prog;
 
           #include <linux/btf.h>
 
           /*
-           * struct xdp_buff
+           * xdp_buff
            */
           #include <net/xdp.h>
 
           /*
-           * struct udp_sock
+           * udp_sock
            */
           #include <linux/udp.h>
 
           /*
-           * struct udp6_sock
+           * udp6_sock
            */
           #include <${UDP6_HEADER_REL}>
 
           /*
-           * struct tcp_timewait_sock
-           * struct tcp_sock
+           * tcp_timewait_sock
+           * tcp_sock
            */
           #include <${TCP_TW_HEADER_REL}>
 
           /*
-           * struct tcp_request_sock
+           * tcp_request_sock
            */
           #include <${TCP_REQ_HEADER_REL}>
 
           /*
-           * struct tcp6_sock
+           * tcp6_sock
            */
           #include <${TCP6_HEADER_REL}>
 
           /*
-           * struct netlink_sock
-           *
-           * Internal net/netlink header.
+           * netlink_sock
            */
           #include "${NETLINK_HEADER_REL}"
 
           /*
-           * BTF_TYPE_EMIT(struct netlink_sock) alone was not enough
-           * on this kernel tree.
+           * ==========================================================
+           * Real storage for every required type.
            *
-           * Create real storage of the complete type.
+           * Do not rely only on BTF_TYPE_EMIT.
+           * ==========================================================
            */
+
+          static struct xdp_buff
+          btf_force_xdp_buff_object __used;
+
+          static struct udp_sock
+          btf_force_udp_sock_object __used;
+
+          static struct udp6_sock
+          btf_force_udp6_sock_object __used;
+
+          static struct tcp_timewait_sock
+          btf_force_tcp_timewait_sock_object __used;
+
+          static struct tcp_sock
+          btf_force_tcp_sock_object __used;
+
+          static struct tcp_request_sock
+          btf_force_tcp_request_sock_object __used;
+
+          static struct tcp6_sock
+          btf_force_tcp6_sock_object __used;
+
           static struct netlink_sock
           btf_force_netlink_sock_object __used;
 
-          /*
-           * Concrete function reference to the real object.
-           */
-          static __used noinline struct netlink_sock *
-          btf_force_netlink_sock_get(void)
-          {
-              return &btf_force_netlink_sock_object;
-          }
 
           /*
-           * Force all required types into compiler debug information.
+           * ==========================================================
+           * Concrete relocation references.
+           *
+           * The array itself is also __used, so every object address
+           * must be emitted into the ELF object.
+           * ==========================================================
            */
-          static __used noinline void btf_force_emit_required_types(void)
+
+          static void * const btf_force_required_type_objects[] __used = {
+              &btf_force_xdp_buff_object,
+              &btf_force_udp_sock_object,
+              &btf_force_udp6_sock_object,
+              &btf_force_tcp_timewait_sock_object,
+              &btf_force_tcp_sock_object,
+              &btf_force_tcp_request_sock_object,
+              &btf_force_tcp6_sock_object,
+              &btf_force_netlink_sock_object,
+          };
+
+
+          /*
+           * ==========================================================
+           * noinline accessor.
+           *
+           * Gives the compiler another concrete use of the array and
+           * underlying objects.
+           * ==========================================================
+           */
+
+          static __used noinline void *
+          btf_force_required_type_get(unsigned int index)
           {
+              if (index >=
+                  sizeof(btf_force_required_type_objects) /
+                  sizeof(btf_force_required_type_objects[0]))
+                  return (void *)0;
+
+              return btf_force_required_type_objects[index];
+          }
+
+
+          /*
+           * ==========================================================
+           * Force required types into debug information.
+           * ==========================================================
+           */
+
+          static __used noinline void
+          btf_force_emit_required_types(void)
+          {
+              /*
+               * Standard BTF_TYPE_EMIT references.
+               */
               BTF_TYPE_EMIT(struct xdp_buff);
               BTF_TYPE_EMIT(struct udp_sock);
               BTF_TYPE_EMIT(struct udp6_sock);
@@ -2011,14 +2051,28 @@ jobs:
               BTF_TYPE_EMIT(struct netlink_sock);
 
               /*
-               * Force a complete-type operation.
+               * Complete-type operations.
                */
+              (void)sizeof(struct xdp_buff);
+              (void)sizeof(struct udp_sock);
+              (void)sizeof(struct udp6_sock);
+              (void)sizeof(struct tcp_timewait_sock);
+              (void)sizeof(struct tcp_sock);
+              (void)sizeof(struct tcp_request_sock);
+              (void)sizeof(struct tcp6_sock);
               (void)sizeof(struct netlink_sock);
 
               /*
-               * Keep concrete object reference alive.
+               * Concrete references.
                */
-              (void)btf_force_netlink_sock_get();
+              (void)btf_force_required_type_get(0);
+              (void)btf_force_required_type_get(1);
+              (void)btf_force_required_type_get(2);
+              (void)btf_force_required_type_get(3);
+              (void)btf_force_required_type_get(4);
+              (void)btf_force_required_type_get(5);
+              (void)btf_force_required_type_get(6);
+              (void)btf_force_required_type_get(7);
           }
           EOF
 
@@ -2029,6 +2083,7 @@ jobs:
           # ============================================================
           # 加入 kernel/Makefile
           # ============================================================
+
           if ! grep -qF \
             'obj-$(CONFIG_DEBUG_INFO_BTF) += btf_xdp_buff_emit.o' \
             "$KERNEL_MAKEFILE"; then
@@ -2046,10 +2101,9 @@ jobs:
           fi
 
           # ============================================================
-          # helper 强制完整 standalone DWARF
-          #
-          # 这是本次 netlink_sock 修复的关键之一。
+          # standalone DWARF
           # ============================================================
+
           if ! grep -qF \
             'CFLAGS_btf_xdp_buff_emit.o += -fstandalone-debug' \
             "$KERNEL_MAKEFILE"; then
@@ -2067,29 +2121,27 @@ jobs:
             "$KERNEL_MAKEFILE" \
             || true
 
-          echo "✅ BTF required types strong emit 修复已应用"
+          echo "✅ Strong BTF emit patch applied"
 
           # ============================================================
-          # 修复 Android 12 / Kernel 5.10 host 构建环境
+          # Android host tools
           #
-          # 注意：
-          #
-          # 不使用：
+          # 不设置：
           #
           #   LD=/usr/bin/ld
           #   HOSTLD=/usr/bin/ld
-          #   export PATH=/usr/bin:$PATH
+          #   PATH=/usr/bin:$PATH
           #
-          # Android/OPPO build 会自己管理 PATH。
-          #
-          # 我们只把必要工具加入它自己的 build-tools PATH。
+          # 只把需要的工具放进 Android 自己的 PATH 目录。
           # ============================================================
           echo "=== Fix host build tools ==="
 
           BUILD_TOOLS_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/build/build-tools/path/linux-x86"
 
+          mkdir -p "$BUILD_TOOLS_BIN"
+
           # ============================================================
-          # Android Clang 自带 ld.lld
+          # Android ld.lld
           # ============================================================
           LLD_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
             -type f \
@@ -2099,7 +2151,7 @@ jobs:
 
           if [ -z "$LLD_BIN" ]; then
 
-            echo "❌ 找不到 Android Clang 自带 ld.lld"
+            echo "❌ 找不到 Android Clang ld.lld"
 
             exit 1
 
@@ -2108,9 +2160,6 @@ jobs:
           echo "✅ 找到 ld.lld:"
           echo "$LLD_BIN"
 
-          mkdir -p "$BUILD_TOOLS_BIN"
-
-          # clang-12 会寻找名字为 ld 的链接器
           ln -sf \
             "$LLD_BIN" \
             "$BUILD_TOOLS_BIN/ld"
@@ -2146,7 +2195,7 @@ jobs:
             "$BUILD_TOOLS_BIN/printf"
 
           # ============================================================
-          # 显示 host tool alias
+          # 显示 alias
           # ============================================================
           echo "=== Host tools aliases ==="
 
@@ -2171,7 +2220,7 @@ jobs:
             || true
 
           # ============================================================
-          # 保存完整编译日志
+          # Build log
           # ============================================================
           BUILD_LOG="$GITHUB_WORKSPACE/kernel-build.log"
           STATUS_FILE="$GITHUB_WORKSPACE/kernel-build-status.txt"
@@ -2187,7 +2236,7 @@ jobs:
           set +e
 
           # ============================================================
-          # Bazel
+          # Bazel build
           # ============================================================
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
 
@@ -2218,7 +2267,7 @@ jobs:
             BUILD_STATUS=$?
 
           # ============================================================
-          # OPPO build script
+          # OPPO build
           # ============================================================
           else
 
@@ -2239,20 +2288,24 @@ jobs:
           set -e
 
           # ============================================================
-          # 保存官方脚本退出码
+          # 保存官方脚本退出状态
           # ============================================================
           echo "$BUILD_STATUS" \
             > "$STATUS_FILE"
 
           echo "=== 官方构建脚本退出码 ==="
+
           echo "$BUILD_STATUS"
 
           # ============================================================
-          # 检查真正的编译产物
+          # 查找产物
           #
-          # OPPO 外层脚本可能吞掉内部 make 错误，
-          # 所以不能只相信 BUILD_STATUS。
+          # OPPO 外层 build script 可能返回 0，
+          # 即使内部 make 已经失败。
+          #
+          # 所以必须实际检查 Image。
           # ============================================================
+
           IMAGE=$(find ./kernel_platform/out \
             -type f \
             -name "Image" \
@@ -2280,6 +2333,7 @@ jobs:
           # ============================================================
           # 最终成功判断
           # ============================================================
+
           if [ -z "$IMAGE" ] && [ -z "$IMAGE_LZ4" ]; then
 
             echo ""
@@ -2349,14 +2403,28 @@ jobs:
           grep -nEi \
             'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock|btf_xdp_buff_emit|standalone-debug|seq_file|bpf_prog|Segmentation fault|Killed' \
             "$LOG" \
-            | tail -n 180 \
+            | tail -n 200 \
             || true
 
           echo ""
 
-          echo "================ 最后 300 行 ================"
+          echo "================ BTFIDS 附近 ================="
 
-          tail -n 300 "$LOG" || true
+          grep -n \
+            -B 15 \
+            -A 25 \
+            'BTFIDS  vmlinux' \
+            "$LOG" \
+            | tail -n 100 \
+            || true
+
+          echo ""
+
+          echo "================ 最后 350 行 ================"
+
+          tail -n 350 \
+            "$LOG" \
+            || true
 
       - name: Upload Kernel Build Log
         if: always()

@@ -1478,6 +1478,7 @@ jobs:
           #   FAILED unresolved symbol udp_sock
           #   FAILED unresolved symbol udp6_sock
           #   FAILED unresolved symbol tcp_timewait_sock
+          #   FAILED unresolved symbol tcp_sock
           #
           # 强制把这些类型写入 DWARF / BTF。
           # ============================================================
@@ -1631,6 +1632,9 @@ jobs:
 
           # ============================================================
           # 自动查找 struct tcp_timewait_sock
+          #
+          # tcp_sock 与 tcp_timewait_sock 都位于 linux/tcp.h，
+          # 所以找到这个头文件以后两者一起使用。
           # ============================================================
           echo "=== Search struct tcp_timewait_sock ==="
 
@@ -1667,6 +1671,38 @@ jobs:
 
           grep -n \
             "struct tcp_timewait_sock" \
+            "$TCP_TW_HEADER" \
+            | head -n 10 \
+            || true
+
+          # ============================================================
+          # 确认 struct tcp_sock
+          # ============================================================
+          echo "=== Check struct tcp_sock ==="
+
+          if ! grep -qE \
+            'struct[[:space:]]+tcp_sock[[:space:]]*\{' \
+            "$TCP_TW_HEADER"; then
+
+            echo "❌ 当前 TCP 头文件中没有找到 struct tcp_sock"
+
+            echo "=== 搜索 struct tcp_sock ==="
+
+            grep -RnsE \
+              'struct[[:space:]]+tcp_sock[[:space:]]*\{' \
+              "$COMMON_DIR/include" \
+              2>/dev/null \
+              | head -n 30 \
+              || true
+
+            exit 1
+
+          fi
+
+          echo "✅ 找到 struct tcp_sock"
+
+          grep -n \
+            "struct tcp_sock" \
             "$TCP_TW_HEADER" \
             | head -n 10 \
             || true
@@ -1716,6 +1752,7 @@ jobs:
            *   FAILED unresolved symbol udp_sock
            *   FAILED unresolved symbol udp6_sock
            *   FAILED unresolved symbol tcp_timewait_sock
+           *   FAILED unresolved symbol tcp_sock
            */
 
           #include <linux/compiler.h>
@@ -1746,6 +1783,7 @@ jobs:
 
           /*
            * struct tcp_timewait_sock
+           * struct tcp_sock
            */
           #include <${TCP_TW_HEADER_REL}>
 
@@ -1755,6 +1793,7 @@ jobs:
               BTF_TYPE_EMIT(struct udp_sock);
               BTF_TYPE_EMIT(struct udp6_sock);
               BTF_TYPE_EMIT(struct tcp_timewait_sock);
+              BTF_TYPE_EMIT(struct tcp_sock);
           }
           EOF
 
@@ -2066,7 +2105,7 @@ jobs:
           echo "================ 关键错误 ================="
 
           grep -nEi \
-            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
+            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
             "$LOG" \
             | tail -n 150 \
             || true

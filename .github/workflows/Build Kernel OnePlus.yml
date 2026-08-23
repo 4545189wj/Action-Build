@@ -1479,6 +1479,7 @@ jobs:
           #   FAILED unresolved symbol udp6_sock
           #   FAILED unresolved symbol tcp_timewait_sock
           #   FAILED unresolved symbol tcp_sock
+          #   FAILED unresolved symbol tcp_request_sock
           #
           # 强制把这些类型写入 DWARF / BTF。
           # ============================================================
@@ -1573,7 +1574,7 @@ jobs:
               'struct[[:space:]]+udp_sock[[:space:]]*\{' \
               "$COMMON_DIR/include" \
               2>/dev/null \
-              | head -n 20 \
+              | head -n 30 \
               || true
 
             exit 1
@@ -1632,9 +1633,6 @@ jobs:
 
           # ============================================================
           # 自动查找 struct tcp_timewait_sock
-          #
-          # tcp_sock 与 tcp_timewait_sock 都位于 linux/tcp.h，
-          # 所以找到这个头文件以后两者一起使用。
           # ============================================================
           echo "=== Search struct tcp_timewait_sock ==="
 
@@ -1708,6 +1706,51 @@ jobs:
             || true
 
           # ============================================================
+          # 自动查找 struct tcp_request_sock
+          #
+          # 不直接假设它一定在 linux/tcp.h，
+          # 自动寻找真实定义所在的头文件。
+          # ============================================================
+          echo "=== Search struct tcp_request_sock ==="
+
+          TCP_REQ_HEADER=$(grep -RslE \
+            'struct[[:space:]]+tcp_request_sock[[:space:]]*\{' \
+            "$COMMON_DIR/include" \
+            2>/dev/null \
+            | head -n 1)
+
+          if [ -z "$TCP_REQ_HEADER" ]; then
+
+            echo "❌ 找不到 struct tcp_request_sock 的定义"
+
+            echo "=== tcp_request_sock 搜索结果 ==="
+
+            grep -Rns \
+              "tcp_request_sock" \
+              "$COMMON_DIR/include" \
+              2>/dev/null \
+              | head -n 50 \
+              || true
+
+            exit 1
+
+          fi
+
+          TCP_REQ_HEADER_REL="${TCP_REQ_HEADER#$COMMON_DIR/include/}"
+
+          echo "✅ 找到 struct tcp_request_sock:"
+          echo "$TCP_REQ_HEADER"
+
+          echo "✅ include 路径:"
+          echo "$TCP_REQ_HEADER_REL"
+
+          grep -n \
+            "struct tcp_request_sock" \
+            "$TCP_REQ_HEADER" \
+            | head -n 10 \
+            || true
+
+          # ============================================================
           # 确认 BTF_TYPE_EMIT
           # ============================================================
           if ! grep -Rq \
@@ -1737,8 +1780,7 @@ jobs:
           # 对 struct seq_file / struct bpf_prog 的声明不完整，
           # 所以必须提前 forward declare。
           #
-          # 这里使用可展开的 heredoc，
-          # 因为要插入自动检测到的头文件路径。
+          # heredoc 允许展开自动检测到的头文件路径。
           # ============================================================
           cat > "$BTF_EMIT_C" <<EOF
           // SPDX-License-Identifier: GPL-2.0
@@ -1753,6 +1795,7 @@ jobs:
            *   FAILED unresolved symbol udp6_sock
            *   FAILED unresolved symbol tcp_timewait_sock
            *   FAILED unresolved symbol tcp_sock
+           *   FAILED unresolved symbol tcp_request_sock
            */
 
           #include <linux/compiler.h>
@@ -1787,6 +1830,11 @@ jobs:
            */
           #include <${TCP_TW_HEADER_REL}>
 
+          /*
+           * struct tcp_request_sock
+           */
+          #include <${TCP_REQ_HEADER_REL}>
+
           static __used noinline void btf_force_emit_required_types(void)
           {
               BTF_TYPE_EMIT(struct xdp_buff);
@@ -1794,6 +1842,7 @@ jobs:
               BTF_TYPE_EMIT(struct udp6_sock);
               BTF_TYPE_EMIT(struct tcp_timewait_sock);
               BTF_TYPE_EMIT(struct tcp_sock);
+              BTF_TYPE_EMIT(struct tcp_request_sock);
           }
           EOF
 
@@ -1862,7 +1911,6 @@ jobs:
 
           mkdir -p "$BUILD_TOOLS_BIN"
 
-          # clang-12 默认寻找名为 ld 的链接器
           ln -sf \
             "$LLD_BIN" \
             "$BUILD_TOOLS_BIN/ld"
@@ -2027,9 +2075,7 @@ jobs:
           echo "=== 编译产物 ==="
 
           echo "Image     = ${IMAGE:-未找到}"
-
           echo "Image.lz4 = ${IMAGE_LZ4:-未找到}"
-
           echo "vmlinux   = ${VMLINUX:-未找到}"
 
           # ============================================================
@@ -2105,7 +2151,7 @@ jobs:
           echo "================ 关键错误 ================="
 
           grep -nEi \
-            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
+            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
             "$LOG" \
             | tail -n 150 \
             || true

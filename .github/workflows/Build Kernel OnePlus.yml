@@ -1488,7 +1488,7 @@ jobs:
           NETLINK_MAKEFILE="$COMMON_DIR/net/netlink/Makefile"
 
           # ============================================================
-          # 基础检查
+          # 基础文件检查
           # ============================================================
 
           for REQUIRED_FILE in \
@@ -1722,9 +1722,7 @@ jobs:
             || true
 
           # ============================================================
-          # 前 7 个类型继续使用独立 helper
-          #
-          # netlink_sock 不放这里。
+          # 前 7 个类型继续使用 helper
           # ============================================================
 
           echo "=== Create normal BTF helper ==="
@@ -1734,8 +1732,7 @@ jobs:
           /*
            * Force selected kernel types into DWARF/BTF.
            *
-           * netlink_sock is intentionally handled directly
-           * in net/netlink/af_netlink.c.
+           * netlink_sock is handled directly in af_netlink.c.
            */
 
           #include <linux/compiler.h>
@@ -1800,17 +1797,16 @@ jobs:
             || true
 
           # ============================================================
-          # netlink_sock 强制 BTF 保留
+          # netlink_sock 强制保留
           #
-          # 这次全部放进真实 af_netlink.c：
+          # 全部放进真实 af_netlink.c：
           #
-          #   1. struct netlink_sock 真实对象
-          #   2. BTF_TYPE_EMIT(struct netlink_sock)
-          #   3. noinline + __used 真实函数
-          #   4. asm volatile 引用真实对象
-          #   5. sizeof 完整类型
-          #   6. netlink_proto_init() 真实调用该函数
-          #
+          # 1. 真实 struct netlink_sock 对象
+          # 2. BTF_TYPE_EMIT(struct netlink_sock)
+          # 3. __used + noinline 函数
+          # 4. sizeof 完整类型
+          # 5. asm volatile 强引用对象
+          # 6. netlink_proto_init() 真实调用
           # ============================================================
 
           echo "=== Patch af_netlink.c for strong netlink_sock BTF ==="
@@ -1827,11 +1823,7 @@ jobs:
           call_marker = "BTF_FORCE_NETLINK_SOCK_CALL"
 
           # ============================================================
-          # 插入强制类型保留 block
-          #
-          # 必须在 #include "af_netlink.h" 之后。
-          #
-          # 因为此时 struct netlink_sock 已经是完整类型。
+          # 插入强制类型 block
           # ============================================================
 
           if type_marker not in text:
@@ -1856,10 +1848,7 @@ jobs:
           /*
            * BTF_FORCE_NETLINK_SOCK_TYPE
            *
-           * Force struct netlink_sock to remain present in DWARF/BTF.
-           *
-           * Keep this inside af_netlink.c because this translation unit
-           * owns and heavily uses the private struct netlink_sock type.
+           * Force struct netlink_sock to remain in DWARF/BTF.
            */
 
           struct seq_file;
@@ -1873,20 +1862,10 @@ jobs:
           static __used noinline void
           btf_force_netlink_sock_type(void)
           {
-              /*
-               * Explicit BTF type reference.
-               */
               BTF_TYPE_EMIT(struct netlink_sock);
 
-              /*
-               * Require the complete type.
-               */
               (void)sizeof(struct netlink_sock);
 
-              /*
-               * Produce a real non-removable reference to storage
-               * whose type is struct netlink_sock.
-               */
               asm volatile(
                   ""
                   :
@@ -1904,14 +1883,9 @@ jobs:
               )
 
           # ============================================================
-          # netlink_proto_init()
+          # netlink_proto_init() 真实调用
           #
-          # 必须在：
-          #
-          #   int i;
-          #   int err = ...;
-          #
-          # 之后调用，避免 C90 declaration-after-statement。
+          # 必须在局部变量声明以后，避免 C90 错误。
           # ============================================================
 
           if call_marker not in text:
@@ -1966,10 +1940,8 @@ jobs:
               /*
                * BTF_FORCE_NETLINK_SOCK_CALL
                *
-               * Real call from an init path that is retained in
-               * the final kernel.
-               *
-               * Deliberately placed after all local declarations.
+               * Real call from retained init path.
+               * Deliberately placed after local declarations.
                */
               btf_force_netlink_sock_type();
 
@@ -1987,7 +1959,7 @@ jobs:
           echo "✅ af_netlink.c strong BTF patch applied"
 
           # ============================================================
-          # 显示完整类型 block
+          # Patch 验证
           # ============================================================
 
           echo "=== Verify netlink type block ==="
@@ -2001,10 +1973,6 @@ jobs:
 
           echo ""
 
-          # ============================================================
-          # 显示 init call
-          # ============================================================
-
           echo "=== Verify netlink init call ==="
 
           grep -n \
@@ -2013,10 +1981,6 @@ jobs:
             'BTF_FORCE_NETLINK_SOCK_CALL' \
             "$AF_NETLINK_C" \
             || true
-
-          # ============================================================
-          # 检查强制类型代码真的完整存在
-          # ============================================================
 
           echo "=== Verify strong netlink BTF references ==="
 
@@ -2034,7 +1998,7 @@ jobs:
             'btf_force_netlink_sock_object' \
             "$AF_NETLINK_C"; then
 
-            echo "❌ af_netlink.c 中缺少真实 netlink_sock object"
+            echo "❌ af_netlink.c 中缺少 netlink_sock object"
 
             exit 1
 
@@ -2044,7 +2008,7 @@ jobs:
             'btf_force_netlink_sock_type' \
             "$AF_NETLINK_C"; then
 
-            echo "❌ af_netlink.c 中缺少强制 BTF 函数"
+            echo "❌ af_netlink.c 中缺少 BTF 强制函数"
 
             exit 1
 
@@ -2061,7 +2025,7 @@ jobs:
           fi
 
           # ============================================================
-          # 检查 C90 顺序
+          # C90 顺序检查
           # ============================================================
 
           echo "=== Verify C90 declaration order ==="
@@ -2091,7 +2055,9 @@ jobs:
 
           body = func.group("body")
 
-          i_pos = body.find("int i;")
+          i_pos = body.find(
+              "int i;"
+          )
 
           err_pos = body.find(
               "int err = proto_register"
@@ -2156,33 +2122,69 @@ jobs:
           PY
 
           # ============================================================
-          # af_netlink.o standalone DWARF
+          # af_netlink.o：
+          #
+          # 1. -fstandalone-debug
+          # 2. 只对这个 object 去掉 ThinLTO
+          #
+          # 全局 LTO=thin 保持不变。
           # ============================================================
 
-          echo "=== Configure af_netlink.o standalone DWARF ==="
+          echo "=== Configure af_netlink.o DWARF / no-LTO ==="
+
+          # 清除旧配置，避免重复
+          sed -i \
+            '/CFLAGS_af_netlink\.o[[:space:]]*+=[[:space:]]*-fstandalone-debug/d' \
+            "$NETLINK_MAKEFILE"
+
+          sed -i \
+            '/CFLAGS_REMOVE_af_netlink\.o[[:space:]]*+=[[:space:]]*$(CC_FLAGS_LTO)/d' \
+            "$NETLINK_MAKEFILE"
+
+          echo "" >> "$NETLINK_MAKEFILE"
+
+          echo \
+            '# Preserve complete netlink_sock DWARF/BTF type' \
+            >> "$NETLINK_MAKEFILE"
+
+          echo \
+            'CFLAGS_af_netlink.o += -fstandalone-debug' \
+            >> "$NETLINK_MAKEFILE"
+
+          echo \
+            'CFLAGS_REMOVE_af_netlink.o += $(CC_FLAGS_LTO)' \
+            >> "$NETLINK_MAKEFILE"
+
+          echo "=== net/netlink/Makefile BTF / LTO entries ==="
+
+          grep -nE \
+            'CFLAGS(_REMOVE)?_af_netlink\.o' \
+            "$NETLINK_MAKEFILE" \
+            || true
+
+          # ============================================================
+          # 验证 no-LTO 配置
+          # ============================================================
 
           if ! grep -qF \
             'CFLAGS_af_netlink.o += -fstandalone-debug' \
             "$NETLINK_MAKEFILE"; then
 
-            echo "" >> "$NETLINK_MAKEFILE"
+            echo "❌ af_netlink.o 缺少 -fstandalone-debug"
 
-            echo \
-              '# Preserve complete netlink_sock DWARF/BTF type' \
-              >> "$NETLINK_MAKEFILE"
-
-            echo \
-              'CFLAGS_af_netlink.o += -fstandalone-debug' \
-              >> "$NETLINK_MAKEFILE"
+            exit 1
 
           fi
 
-          echo "=== net/netlink/Makefile ==="
+          if ! grep -qF \
+            'CFLAGS_REMOVE_af_netlink.o += $(CC_FLAGS_LTO)' \
+            "$NETLINK_MAKEFILE"; then
 
-          grep -n \
-            'CFLAGS_af_netlink.o' \
-            "$NETLINK_MAKEFILE" \
-            || true
+            echo "❌ af_netlink.o 缺少 CC_FLAGS_LTO remove"
+
+            exit 1
+
+          fi
 
           # ============================================================
           # 最终 BTF patch 状态
@@ -2208,18 +2210,13 @@ jobs:
           echo "✅ netlink_proto_init 真实调用：存在"
           echo "✅ C90 declaration order：正确"
           echo "✅ af_netlink.o：-fstandalone-debug"
+          echo "✅ af_netlink.o：移除 CC_FLAGS_LTO"
+          echo "✅ 全局 ThinLTO：保持开启"
 
           # ============================================================
           # Android host tools
           #
-          # 保持原来已经验证成功的方法。
-          #
-          # 不使用：
-          #
-          #   LD=/usr/bin/ld
-          #   HOSTLD=/usr/bin/ld
-          #   export PATH=/usr/bin:$PATH
-          #
+          # 不改现有已验证配置。
           # ============================================================
 
           echo "=== Fix host build tools ==="
@@ -2306,8 +2303,10 @@ jobs:
           rm -f "$STATUS_FILE"
 
           echo "=== 开始内核编译 ==="
+
           echo "CPUD=$CPUD"
           echo "BUILD_METHOD=$BUILD_METHOD"
+
           echo "完整日志保存到:"
           echo "$BUILD_LOG"
 
@@ -2366,6 +2365,131 @@ jobs:
           echo "$BUILD_STATUS"
 
           # ============================================================
+          # 查找输出目录
+          # ============================================================
+
+          KERNEL_OUT=$(find ./kernel_platform/out \
+            -type d \
+            -path '*/gki_kernel/common' \
+            2>/dev/null \
+            | head -n 1)
+
+          echo "=== Kernel out directory ==="
+
+          echo "${KERNEL_OUT:-未找到}"
+
+          # ============================================================
+          # af_netlink.o 调试信息诊断
+          #
+          # 无论 build 成功失败都尝试检查。
+          # ============================================================
+
+          AF_NETLINK_O=""
+
+          if [ -n "$KERNEL_OUT" ]; then
+
+            AF_NETLINK_O=$(find "$KERNEL_OUT" \
+              -type f \
+              -path '*/net/netlink/af_netlink.o' \
+              2>/dev/null \
+              | head -n 1)
+
+          fi
+
+          echo "=== af_netlink.o ==="
+
+          echo "${AF_NETLINK_O:-未找到}"
+
+          if [ -n "$AF_NETLINK_O" ]; then
+
+            echo "=== af_netlink.o file type ==="
+
+            file "$AF_NETLINK_O" \
+              || true
+
+            echo ""
+
+            echo "=== af_netlink.o sections ==="
+
+            readelf -S \
+              "$AF_NETLINK_O" \
+              2>/dev/null \
+              | grep -Ei \
+                'debug|llvm|bitcode|lto' \
+              | head -n 100 \
+              || true
+
+            echo ""
+
+            echo "=== af_netlink.o DWARF netlink_sock ==="
+
+            readelf \
+              --debug-dump=info \
+              "$AF_NETLINK_O" \
+              2>/dev/null \
+              | grep -n \
+                -A 5 \
+                -B 5 \
+                'netlink_sock' \
+              | head -n 100 \
+              || true
+
+          fi
+
+          # ============================================================
+          # 查找临时 BTF vmlinux
+          # ============================================================
+
+          TMP_VMLINUX_BTF=""
+
+          if [ -n "$KERNEL_OUT" ]; then
+
+            TMP_VMLINUX_BTF=$(find "$KERNEL_OUT" \
+              -type f \
+              -name '.tmp_vmlinux.btf' \
+              2>/dev/null \
+              | head -n 1)
+
+          fi
+
+          echo "=== .tmp_vmlinux.btf ==="
+
+          echo "${TMP_VMLINUX_BTF:-未找到}"
+
+          # ============================================================
+          # 如果 bpftool 可用，直接检查 BTF 内是否存在 netlink_sock
+          # ============================================================
+
+          BPFTOOL_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
+            -type f \
+            -name bpftool \
+            -perm -111 \
+            2>/dev/null \
+            | head -n 1)
+
+          if [ -n "$BPFTOOL_BIN" ] && [ -n "$TMP_VMLINUX_BTF" ]; then
+
+            echo "=== Check netlink_sock in generated BTF ==="
+
+            "$BPFTOOL_BIN" \
+              btf dump \
+              file "$TMP_VMLINUX_BTF" \
+              format raw \
+              2>/dev/null \
+              | grep -n \
+                -A 8 \
+                -B 3 \
+                "netlink_sock" \
+              | head -n 100 \
+              || true
+
+          else
+
+            echo "⚠️ bpftool 或 .tmp_vmlinux.btf 不可用，跳过 BTF dump"
+
+          fi
+
+          # ============================================================
           # 产物检查
           # ============================================================
 
@@ -2393,6 +2517,10 @@ jobs:
           echo "Image.lz4 = ${IMAGE_LZ4:-未找到}"
           echo "vmlinux   = ${VMLINUX:-未找到}"
 
+          # ============================================================
+          # 成功判断
+          # ============================================================
+
           if [ -z "$IMAGE" ] && [ -z "$IMAGE_LZ4" ]; then
 
             echo ""
@@ -2417,6 +2545,7 @@ jobs:
           fi
 
           echo ""
+
           echo "✅ 内核编译成功"
 
           echo "=== 最终内核文件 ==="
@@ -2459,9 +2588,9 @@ jobs:
           echo "================ 关键错误 ================="
 
           grep -nEi \
-            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock|af_netlink|btf_force_netlink|btf_xdp_buff_emit|standalone-debug|declaration-after-statement|seq_file|bpf_prog|Segmentation fault|Killed' \
+            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock|af_netlink|btf_force_netlink|btf_xdp_buff_emit|standalone-debug|declaration-after-statement|thinlto|flto|CC_FLAGS_LTO|CFLAGS_REMOVE|seq_file|bpf_prog|Segmentation fault|Killed' \
             "$LOG" \
-            | tail -n 350 \
+            | tail -n 400 \
             || true
 
           echo ""
@@ -2469,9 +2598,9 @@ jobs:
           echo "================ af_netlink 编译 ================="
 
           grep -nEi \
-            'CC +net/netlink/af_netlink.o|af_netlink\.c:|btf_force_netlink_sock|declaration-after-statement' \
+            'CC +net/netlink/af_netlink.o|af_netlink\.c:|af_netlink\.o|btf_force_netlink_sock|standalone-debug|flto|thinlto' \
             "$LOG" \
-            | tail -n 150 \
+            | tail -n 200 \
             || true
 
           echo ""
@@ -2481,7 +2610,7 @@ jobs:
           grep -nEi \
             'CC +kernel/btf_xdp_buff_emit.o|CC +net/netlink/af_netlink.o|LD +\.tmp_vmlinux\.btf|BTF +\.btf\.vmlinux\.bin\.o|BTFIDS +vmlinux' \
             "$LOG" \
-            | tail -n 180 \
+            | tail -n 200 \
             || true
 
           echo ""
@@ -2489,11 +2618,11 @@ jobs:
           echo "================ BTFIDS 附近 ================="
 
           grep -n \
-            -B 35 \
-            -A 50 \
+            -B 40 \
+            -A 60 \
             'BTFIDS  vmlinux' \
             "$LOG" \
-            | tail -n 220 \
+            | tail -n 260 \
             || true
 
           echo ""
@@ -2508,9 +2637,29 @@ jobs:
 
           echo ""
 
-          echo "================ 最后 500 行 ================"
+          echo "================ netlink_sock ================="
 
-          tail -n 500 \
+          grep -nEi \
+            'netlink_sock|btf_force_netlink_sock' \
+            "$LOG" \
+            | tail -n 150 \
+            || true
+
+          echo ""
+
+          echo "================ pahole DWARF warnings ================="
+
+          grep -nEi \
+            'tag__recode_dwarf_type|ftype__recode_dwarf_types|couldn.t find.*type' \
+            "$LOG" \
+            | tail -n 150 \
+            || true
+
+          echo ""
+
+          echo "================ 最后 550 行 ================"
+
+          tail -n 550 \
             "$LOG" \
             || true
 

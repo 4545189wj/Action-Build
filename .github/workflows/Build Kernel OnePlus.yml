@@ -1439,21 +1439,30 @@ jobs:
             | head -n 1)
 
           if [ -n "$PAHOLE_BIN" ]; then
+
             echo "✅ 使用 Android prebuilt pahole:"
             echo "$PAHOLE_BIN"
+
           else
+
             echo "⚠️ 没找到 Android prebuilt pahole"
             echo "⚠️ fallback 到 /usr/local/bin/pahole"
+
             PAHOLE_BIN="/usr/local/bin/pahole"
+
           fi
 
           if [ ! -x "$PAHOLE_BIN" ]; then
+
             echo "❌ pahole 不存在或不可执行:"
             echo "$PAHOLE_BIN"
+
             exit 1
+
           fi
 
           echo "=== pahole version ==="
+
           "$PAHOLE_BIN" --version
 
           export PAHOLE="$PAHOLE_BIN"
@@ -1461,7 +1470,7 @@ jobs:
           # ============================================================
           # BTF 类型修复
           #
-          # 前 7 个继续使用独立 helper：
+          # 前 7 个类型继续使用独立 helper：
           #
           #   xdp_buff
           #   udp_sock
@@ -1471,14 +1480,32 @@ jobs:
           #   tcp_request_sock
           #   tcp6_sock
           #
-          # netlink_sock 不再放在这个 helper 中。
-          #
-          # netlink_sock 改为直接在：
+          # netlink_sock 单独处理：
           #
           #   net/netlink/af_netlink.c
           #
-          # 中创建真实对象，并由 netlink_proto_init()
-          # 产生不可优化的实际地址引用。
+          # 在真实定义/使用该结构体的 translation unit 中
+          # 创建真实 struct 对象。
+          #
+          # 并在 netlink_proto_init() 所有局部变量声明之后
+          # 使用 inline asm 创建不可优化的真实地址引用。
+          #
+          # 注意：
+          #
+          # Linux kernel 此处按 C90 规则编译。
+          #
+          # 所以必须：
+          #
+          #   int i;
+          #   int err = ...;
+          #
+          #   asm volatile(...);
+          #
+          # 不能反过来，否则：
+          #
+          #   -Wdeclaration-after-statement
+          #
+          # 会被 -Werror 转换成致命错误。
           # ============================================================
 
           echo "=== Configure BTF type fixes ==="
@@ -1509,11 +1536,16 @@ jobs:
             "$AF_NETLINK_H" \
             "$NETLINK_MAKEFILE"
           do
+
             if [ ! -f "$REQUIRED_FILE" ]; then
+
               echo "❌ 找不到必要文件:"
               echo "$REQUIRED_FILE"
+
               exit 1
+
             fi
+
           done
 
           # ============================================================
@@ -1534,6 +1566,7 @@ jobs:
               || true
 
             exit 1
+
           fi
 
           echo "✅ 找到 struct xdp_buff"
@@ -1564,6 +1597,7 @@ jobs:
               || true
 
             exit 1
+
           fi
 
           echo "✅ 找到 struct udp_sock"
@@ -1598,6 +1632,7 @@ jobs:
               || true
 
             exit 1
+
           fi
 
           UDP6_HEADER_REL="${UDP6_HEADER#$COMMON_DIR/include/}"
@@ -1632,6 +1667,7 @@ jobs:
               || true
 
             exit 1
+
           fi
 
           TCP_TW_HEADER_REL="${TCP_TW_HEADER#$COMMON_DIR/include/}"
@@ -1662,6 +1698,7 @@ jobs:
               || true
 
             exit 1
+
           fi
 
           echo "✅ 找到 struct tcp_sock"
@@ -1690,6 +1727,7 @@ jobs:
               || true
 
             exit 1
+
           fi
 
           TCP_REQ_HEADER_REL="${TCP_REQ_HEADER#$COMMON_DIR/include/}"
@@ -1724,6 +1762,7 @@ jobs:
               || true
 
             exit 1
+
           fi
 
           TCP6_HEADER_REL="${TCP6_HEADER#$COMMON_DIR/include/}"
@@ -1736,8 +1775,6 @@ jobs:
 
           # ============================================================
           # netlink_sock
-          #
-          # 这次不再加入独立 BTF helper。
           # ============================================================
 
           echo "=== Check struct netlink_sock ==="
@@ -1756,9 +1793,11 @@ jobs:
               || true
 
             exit 1
+
           fi
 
           echo "✅ 找到 struct netlink_sock:"
+
           grep -n \
             "struct netlink_sock" \
             "$AF_NETLINK_H" \
@@ -1777,7 +1816,9 @@ jobs:
             2>/dev/null; then
 
             echo "❌ 找不到 BTF_TYPE_EMIT"
+
             exit 1
+
           fi
 
           echo "✅ 找到 BTF_TYPE_EMIT"
@@ -1790,21 +1831,9 @@ jobs:
             || true
 
           # ============================================================
-          # 重新创建普通 BTF helper
+          # 创建前 7 个类型的普通 BTF helper
           #
-          # 注意：
-          #
-          # netlink_sock 已完全移出这里。
-          #
-          # 不再：
-          #
-          #   static struct netlink_sock ...
-          #
-          # 不再给这个 helper 加：
-          #
-          #   -fstandalone-debug
-          #
-          # 恢复前 7 个已经验证能够逐步通过 BTFIDS 的方案。
+          # netlink_sock 不放这里。
           # ============================================================
 
           cat > "$BTF_EMIT_C" <<EOF
@@ -1849,11 +1878,11 @@ jobs:
           # ============================================================
           # kernel/Makefile
           #
-          # 保留 helper object。
+          # 保留 helper。
           #
-          # 清除上一版加的：
+          # 清理上一版可能残留的：
           #
-          # CFLAGS_btf_xdp_buff_emit.o += -fstandalone-debug
+          #   CFLAGS_btf_xdp_buff_emit.o += -fstandalone-debug
           # ============================================================
 
           sed -i \
@@ -1873,6 +1902,7 @@ jobs:
             echo \
               'obj-$(CONFIG_DEBUG_INFO_BTF) += btf_xdp_buff_emit.o' \
               >> "$KERNEL_MAKEFILE"
+
           fi
 
           echo "=== kernel/Makefile helper entries ==="
@@ -1883,19 +1913,31 @@ jobs:
             || true
 
           # ============================================================
-          # 直接修改 af_netlink.c
+          # patch af_netlink.c
           #
-          # 目标：
+          # 这次 netlink_sock 直接从真实 TU 保留。
           #
-          # 1. 在 af_netlink.h 被 include 后创建真实完整对象：
+          # 第一步：
           #
-          #      static struct netlink_sock
-          #      btf_force_netlink_sock_object __used;
+          #   #include "af_netlink.h"
           #
-          # 2. 在 netlink_proto_init() 中用 inline asm
-          #    对真实对象地址产生不可优化引用。
+          # 后创建：
           #
-          # 这会使引用存在于 Netlink 自己真正参与内核的 TU 中。
+          #   static struct netlink_sock
+          #   btf_force_netlink_sock_object __used;
+          #
+          # 第二步：
+          #
+          # 在：
+          #
+          #   static int __init netlink_proto_init(void)
+          #   {
+          #       int i;
+          #       int err = proto_register(...);
+          #
+          # 之后插入 asm。
+          #
+          # 这样不会违反 C90。
           # ============================================================
 
           echo "=== Patch af_netlink.c for netlink_sock BTF ==="
@@ -1906,78 +1948,134 @@ jobs:
           from pathlib import Path
 
           path = Path(sys.argv[1])
+
           text = path.read_text()
 
           object_marker = "BTF_FORCE_NETLINK_SOCK_OBJECT"
           init_marker = "BTF_FORCE_NETLINK_SOCK_INIT"
 
-          # ------------------------------------------------------------
-          # 1. 在 #include "af_netlink.h" 后创建真实完整对象
-          # ------------------------------------------------------------
+          # ============================================================
+          # 1. 在 #include "af_netlink.h" 后插入完整 struct 对象
+          #
+          # 只允许在 af_netlink.h 后面插入。
+          #
+          # 不再 fallback 到 <net/netlink.h>，因为 struct netlink_sock
+          # 的完整定义来自 af_netlink.h。
+          # ============================================================
+
           if object_marker not in text:
-              include_patterns = [
-                  r'(#include\s+"af_netlink\.h"\s*\n)',
-                  r'(#include\s+<net/netlink\.h>\s*\n)',
-              ]
 
-              inserted = False
+              pattern = re.compile(
+                  r'(#include\s+"af_netlink\.h"[^\n]*\n)'
+              )
 
-              for pattern in include_patterns:
-                  match = re.search(pattern, text)
+              match = pattern.search(text)
 
-                  if match:
-                      injection = match.group(1) + r'''
+              if not match:
+
+                  print(
+                      'ERROR: could not find '
+                      '#include "af_netlink.h"'
+                  )
+
+                  sys.exit(1)
+
+              injection = match.group(1) + r'''
+
           /*
            * BTF_FORCE_NETLINK_SOCK_OBJECT
            *
-           * Keep a real complete struct netlink_sock object in the
-           * translation unit which owns the type.
+           * Real complete object in the translation unit that owns
+           * struct netlink_sock.
            */
           static struct netlink_sock
           btf_force_netlink_sock_object __used;
 
           '''
-                      text = (
-                          text[:match.start()]
-                          + injection
-                          + text[match.end():]
-                      )
 
-                      inserted = True
-                      break
+              text = (
+                  text[:match.start()]
+                  + injection
+                  + text[match.end():]
+              )
 
-              if not inserted:
-                  print("ERROR: could not find af_netlink include location")
-                  sys.exit(1)
+          # ============================================================
+          # 2. netlink_proto_init()
+          #
+          # Linux kernel 这里要求 C90 declaration ordering。
+          #
+          # 当前源码已经确认是：
+          #
+          # static int __init netlink_proto_init(void)
+          # {
+          #     int i;
+          #     int err = proto_register(&netlink_proto, 0);
+          #
+          # 必须在 int i / int err 声明完成以后再插入 asm。
+          # ============================================================
 
-          # ------------------------------------------------------------
-          # 2. 在 netlink_proto_init() 入口强制真实地址引用
-          # ------------------------------------------------------------
           if init_marker not in text:
+
               pattern = re.compile(
                   r'('
                   r'(?:static\s+)?'
                   r'int\s+__init\s+netlink_proto_init'
                   r'\s*\(\s*void\s*\)\s*'
-                  r'\{'
+                  r'\{\s*\n'
+                  r'\s*int\s+i\s*;\s*\n'
+                  r'\s*int\s+err\s*=\s*'
+                  r'proto_register'
+                  r'\s*\(\s*&netlink_proto\s*,\s*0\s*\)'
+                  r'\s*;\s*\n'
                   r')'
               )
 
               match = pattern.search(text)
 
               if not match:
-                  print("ERROR: could not find netlink_proto_init(void)")
+
+                  print(
+                      "ERROR: could not find "
+                      "netlink_proto_init declaration block"
+                  )
+
+                  print("")
+                  print("=== netlink_proto_init source ===")
+
+                  m = re.search(
+                      r'netlink_proto_init\s*\(\s*void\s*\)',
+                      text
+                  )
+
+                  if m:
+
+                      start = max(
+                          0,
+                          m.start() - 300
+                      )
+
+                      end = min(
+                          len(text),
+                          m.start() + 1600
+                      )
+
+                      print(
+                          text[start:end]
+                      )
+
                   sys.exit(1)
 
               injection = match.group(1) + r'''
-
               /*
                * BTF_FORCE_NETLINK_SOCK_INIT
                *
-               * The volatile asm creates a concrete non-removable
-               * reference to the complete struct netlink_sock object.
+               * Concrete, non-removable reference to the real
+               * struct netlink_sock object.
                *
-               * sizeof additionally requires the type to be complete.
+               * IMPORTANT:
+               *
+               * This code is intentionally placed AFTER all local
+               * declarations to satisfy kernel C90 rules.
                */
               asm volatile(
                   ""
@@ -1987,6 +2085,7 @@ jobs:
               );
 
               (void)sizeof(struct netlink_sock);
+
           '''
 
               text = (
@@ -2000,7 +2099,11 @@ jobs:
 
           echo "✅ af_netlink.c patch applied"
 
-          echo "=== Verify af_netlink.c patch ==="
+          # ============================================================
+          # 验证 object
+          # ============================================================
+
+          echo "=== Verify af_netlink object patch ==="
 
           grep -n \
             -B 6 \
@@ -2009,23 +2112,109 @@ jobs:
             "$AF_NETLINK_C" \
             || true
 
+          # ============================================================
+          # 验证 init patch
+          #
+          # 这次重点看：
+          #
+          #   int i;
+          #   int err = ...
+          #
+          # 必须出现在：
+          #
+          #   BTF_FORCE_NETLINK_SOCK_INIT
+          #
+          # 前面。
+          # ============================================================
+
           echo ""
 
+          echo "=== Verify netlink_proto_init patch ==="
+
           grep -n \
-            -B 6 \
-            -A 30 \
+            -B 12 \
+            -A 32 \
             'BTF_FORCE_NETLINK_SOCK_INIT' \
             "$AF_NETLINK_C" \
             || true
 
           # ============================================================
-          # af_netlink.o 强制 standalone debug
-          #
-          # 注意：
-          #
-          # 这次只给真实定义 netlink_sock 的 TU 加。
-          #
-          # 不再给独立 BTF helper 加。
+          # 自动检查 C90 顺序
+          # ============================================================
+
+          python3 - "$AF_NETLINK_C" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+
+          text = path.read_text()
+
+          marker = "BTF_FORCE_NETLINK_SOCK_INIT"
+
+          marker_pos = text.find(marker)
+
+          if marker_pos < 0:
+              print("ERROR: netlink init marker missing")
+              sys.exit(1)
+
+          i_pos = text.rfind(
+              "int i;",
+              0,
+              marker_pos
+          )
+
+          err_pos = text.rfind(
+              "int err = proto_register",
+              0,
+              marker_pos
+          )
+
+          if i_pos < 0:
+              print(
+                  "ERROR: int i declaration was not found "
+                  "before BTF patch"
+              )
+              sys.exit(1)
+
+          if err_pos < 0:
+              print(
+                  "ERROR: int err declaration was not found "
+                  "before BTF patch"
+              )
+              sys.exit(1)
+
+          if not (
+              i_pos < err_pos < marker_pos
+          ):
+              print(
+                  "ERROR: invalid C90 declaration order"
+              )
+
+              print(
+                  "i_pos      =",
+                  i_pos
+              )
+
+              print(
+                  "err_pos    =",
+                  err_pos
+              )
+
+              print(
+                  "marker_pos =",
+                  marker_pos
+              )
+
+              sys.exit(1)
+
+          print(
+              "✅ C90 declaration order verified"
+          )
+          PY
+
+          # ============================================================
+          # af_netlink.o standalone DWARF
           # ============================================================
 
           echo "=== Add af_netlink.o standalone DWARF ==="
@@ -2043,6 +2232,7 @@ jobs:
             echo \
               'CFLAGS_af_netlink.o += -fstandalone-debug' \
               >> "$NETLINK_MAKEFILE"
+
           fi
 
           echo "=== net/netlink/Makefile BTF entry ==="
@@ -2062,8 +2252,10 @@ jobs:
             'BTF_TYPE_EMIT(struct netlink_sock)' \
             "$BTF_EMIT_C"; then
 
-            echo "❌ netlink_sock 不应该继续存在于独立 helper"
+            echo "❌ netlink_sock 不应该存在于独立 helper"
+
             exit 1
+
           fi
 
           if ! grep -q \
@@ -2071,31 +2263,48 @@ jobs:
             "$AF_NETLINK_C"; then
 
             echo "❌ af_netlink.c 中缺少 netlink_sock object"
+
             exit 1
+
           fi
 
           if ! grep -q \
             'BTF_FORCE_NETLINK_SOCK_INIT' \
             "$AF_NETLINK_C"; then
 
-            echo "❌ af_netlink.c 中缺少 netlink_proto_init 强制引用"
+            echo "❌ af_netlink.c 中缺少 init 强制引用"
+
             exit 1
+
+          fi
+
+          if ! grep -qF \
+            'CFLAGS_af_netlink.o += -fstandalone-debug' \
+            "$NETLINK_MAKEFILE"; then
+
+            echo "❌ af_netlink.o 缺少 -fstandalone-debug"
+
+            exit 1
+
           fi
 
           echo "✅ 前 7 个类型：独立 BTF helper"
           echo "✅ netlink_sock：af_netlink.c 真实 TU"
+          echo "✅ netlink_sock object：已创建"
+          echo "✅ netlink_proto_init：真实地址引用"
+          echo "✅ C90 declaration order：正确"
           echo "✅ af_netlink.o：-fstandalone-debug"
 
           # ============================================================
           # Android host tools
           #
-          # 不使用：
+          # 不设置：
           #
           #   LD=/usr/bin/ld
           #   HOSTLD=/usr/bin/ld
           #   export PATH=/usr/bin:$PATH
           #
-          # 继续使用已经验证成功的 Android build-tools 目录。
+          # 继续使用已经验证成功的 Android build-tools 路径。
           # ============================================================
 
           echo "=== Fix host build tools ==="
@@ -2105,7 +2314,7 @@ jobs:
           mkdir -p "$BUILD_TOOLS_BIN"
 
           # ============================================================
-          # Android Clang 自带 ld.lld
+          # Android Clang ld.lld
           # ============================================================
 
           LLD_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
@@ -2115,8 +2324,11 @@ jobs:
             | head -n 1)
 
           if [ -z "$LLD_BIN" ]; then
+
             echo "❌ 找不到 Android Clang ld.lld"
+
             exit 1
+
           fi
 
           echo "✅ 找到 ld.lld:"
@@ -2131,8 +2343,11 @@ jobs:
           # ============================================================
 
           if [ ! -x /usr/bin/dd ]; then
+
             echo "❌ /usr/bin/dd 不存在"
+
             exit 1
+
           fi
 
           ln -sf \
@@ -2144,8 +2359,11 @@ jobs:
           # ============================================================
 
           if [ ! -x /usr/bin/printf ]; then
+
             echo "❌ /usr/bin/printf 不存在"
+
             exit 1
+
           fi
 
           ln -sf \
@@ -2153,7 +2371,7 @@ jobs:
             "$BUILD_TOOLS_BIN/printf"
 
           # ============================================================
-          # host tool 验证
+          # Host tool 验证
           # ============================================================
 
           echo "=== Host tools aliases ==="
@@ -2220,6 +2438,7 @@ jobs:
                 echo "❌ oplus_modules_variant.sh 失败"
 
                 exit "$MODULE_STATUS"
+
               fi
 
             ) > "$BUILD_LOG" 2>&1
@@ -2249,20 +2468,20 @@ jobs:
           set -e
 
           # ============================================================
-          # 保存外层构建退出码
+          # 保存外层 build exit code
           # ============================================================
 
           echo "$BUILD_STATUS" \
             > "$STATUS_FILE"
 
           echo "=== 官方构建脚本退出码 ==="
+
           echo "$BUILD_STATUS"
 
           # ============================================================
           # 实际检查编译产物
           #
-          # OPPO 外层脚本会吞内部 make error，
-          # 所以不能只相信 BUILD_STATUS。
+          # OPPO 外层 build script 可能吞掉内部 make 错误。
           # ============================================================
 
           IMAGE=$(find ./kernel_platform/out \
@@ -2302,6 +2521,7 @@ jobs:
             echo "请查看后面的 Show Kernel Build Error"
 
             exit 1
+
           fi
 
           if [ "$BUILD_STATUS" -ne 0 ]; then
@@ -2312,6 +2532,7 @@ jobs:
             echo "$BUILD_STATUS"
 
             exit "$BUILD_STATUS"
+
           fi
 
           echo ""
@@ -2344,6 +2565,7 @@ jobs:
             cat "$STATUS_FILE"
 
             echo ""
+
           fi
 
           if [ ! -f "$LOG" ]; then
@@ -2351,14 +2573,25 @@ jobs:
             echo "⚠️ kernel-build.log 不存在"
 
             exit 0
+
           fi
 
           echo "================ 关键错误 ================="
 
           grep -nEi \
-            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock|af_netlink|btf_force_netlink|btf_xdp_buff_emit|standalone-debug|seq_file|bpf_prog|Segmentation fault|Killed' \
+            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock|af_netlink|btf_force_netlink|btf_xdp_buff_emit|standalone-debug|declaration-after-statement|seq_file|bpf_prog|Segmentation fault|Killed' \
             "$LOG" \
-            | tail -n 250 \
+            | tail -n 300 \
+            || true
+
+          echo ""
+
+          echo "================ af_netlink 编译 ================="
+
+          grep -nEi \
+            'CC +net/netlink/af_netlink.o|af_netlink\.c:|declaration-after-statement' \
+            "$LOG" \
+            | tail -n 100 \
             || true
 
           echo ""
@@ -2368,7 +2601,7 @@ jobs:
           grep -nEi \
             'CC +kernel/btf_xdp_buff_emit.o|CC +net/netlink/af_netlink.o|LD +\.tmp_vmlinux\.btf|BTF +\.btf\.vmlinux\.bin\.o|BTFIDS +vmlinux' \
             "$LOG" \
-            | tail -n 100 \
+            | tail -n 120 \
             || true
 
           echo ""
@@ -2376,11 +2609,11 @@ jobs:
           echo "================ BTFIDS 附近 ================="
 
           grep -n \
-            -B 25 \
-            -A 35 \
+            -B 30 \
+            -A 40 \
             'BTFIDS  vmlinux' \
             "$LOG" \
-            | tail -n 150 \
+            | tail -n 180 \
             || true
 
           echo ""
@@ -2390,14 +2623,14 @@ jobs:
           grep -n \
             'FAILED unresolved symbol' \
             "$LOG" \
-            | tail -n 50 \
+            | tail -n 80 \
             || true
 
           echo ""
 
-          echo "================ 最后 400 行 ================"
+          echo "================ 最后 450 行 ================"
 
-          tail -n 400 \
+          tail -n 450 \
             "$LOG" \
             || true
 

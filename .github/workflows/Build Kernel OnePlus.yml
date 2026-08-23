@@ -1686,9 +1686,9 @@ jobs:
             || true
 
           # ============================================================
-          # 唯一统一 BTF helper
+          # 统一 BTF helper
           #
-          # 全部 8 个类型：
+          # 8 个类型全部集中到同一个 no-LTO TU：
           #
           #   xdp_buff
           #   udp_sock
@@ -1698,11 +1698,6 @@ jobs:
           #   tcp_request_sock
           #   tcp6_sock
           #   netlink_sock
-          #
-          # helper：
-          #
-          #   -fstandalone-debug
-          #   no ThinLTO
           #
           # ============================================================
 
@@ -1742,10 +1737,7 @@ jobs:
           /*
            * netlink_sock is private to net/netlink.
            *
-           * btf_xdp_buff_emit.c is in common/kernel/,
-           * therefore this resolves to:
-           *
-           * common/net/netlink/af_netlink.h
+           * btf_xdp_buff_emit.c lives in common/kernel/.
            */
           #include "../net/netlink/af_netlink.h"
 
@@ -1842,10 +1834,6 @@ jobs:
             exit 1
           fi
 
-          # ============================================================
-          # helper 源码验证
-          # ============================================================
-
           echo "=== Verify unified helper types ==="
 
           for TYPE in \
@@ -1871,7 +1859,6 @@ jobs:
               exit 1
 
             fi
-
           done
 
           echo ""
@@ -1882,8 +1869,6 @@ jobs:
 
           # ============================================================
           # Android host tools
-          #
-          # 保持此前已经验证成功的方案。
           # ============================================================
 
           echo "=== Fix host build tools ==="
@@ -1953,13 +1938,21 @@ jobs:
           # ============================================================
           # Patch link-vmlinux.sh
           #
-          # 在 resolve_btfids vmlinux 前保存：
+          # 关键：
+          #
+          # 在 ${RESOLVE_BTFIDS} vmlinux 之前保存：
           #
           #   vmlinux
           #   .btf.vmlinux.bin.o
           #   .tmp_vmlinux.btf
           #
-          # 这样即使 BTFIDS 失败，临时文件也不会丢。
+          # 注意：
+          #
+          #   这里故意没有 sync。
+          #
+          # 上一轮 sync 不在 Android build-tools PATH，
+          # 导致 Error 127，真正 resolve_btfids 没有执行。
+          #
           # ============================================================
 
           echo "=== Patch link-vmlinux.sh for BTF diagnostics ==="
@@ -1973,12 +1966,46 @@ jobs:
 
           marker = "BTF_DIAG_SAVE_VMLINUX"
 
+          # ============================================================
+          # 如果脚本中残留旧 diagnostic patch，
+          # 先完整删除，避免旧版 sync 继续存在。
+          # ============================================================
+
           if marker in text:
-              print(
-                  "✅ link-vmlinux.sh diagnostic patch "
-                  "already exists"
-              )
-              sys.exit(0)
+
+              lines = text.splitlines(keepends=True)
+
+              start = None
+              end = None
+
+              for i, line in enumerate(lines):
+                  if marker in line:
+                      start = i
+                      break
+
+              if start is not None:
+
+                  for i in range(start, len(lines)):
+                      if "RESOLVE_BTFIDS" in lines[i] and "vmlinux" in lines[i]:
+                          end = i
+                          break
+
+                  if end is None:
+                      print(
+                          "ERROR: old diagnostic block found "
+                          "but RESOLVE_BTFIDS line missing"
+                      )
+                      sys.exit(1)
+
+                  # 删除旧 diagnostic block，
+                  # 保留真正的 RESOLVE_BTFIDS 行。
+                  del lines[start:end]
+
+                  text = "".join(lines)
+
+                  print(
+                      "✅ removed previous BTF diagnostic block"
+                  )
 
           lines = text.splitlines(keepends=True)
 
@@ -2074,9 +2101,6 @@ jobs:
 
               indent
               + 'fi\n',
-
-              indent
-              + 'sync\n',
           ]
 
           lines[target_index:target_index] = block
@@ -2086,7 +2110,7 @@ jobs:
           )
 
           print(
-              "✅ link-vmlinux.sh patched"
+              "✅ link-vmlinux.sh patched without sync"
           )
           PY
 
@@ -2107,7 +2131,22 @@ jobs:
             exit 1
           fi
 
+          # ============================================================
+          # 非常重要：
+          # 新 diagnostic block 中绝不能再有 sync。
+          # ============================================================
+
+          if grep -A 30 \
+            'BTF_DIAG_SAVE_VMLINUX' \
+            "$LINK_VMLINUX_SH" \
+            | grep -qE '^[[:space:]]*sync([[:space:]]|$)'; then
+
+            echo "❌ diagnostic block 中仍存在 sync"
+            exit 1
+          fi
+
           echo "✅ BTFIDS 前 vmlinux 保存逻辑已安装"
+          echo "✅ diagnostic block 中没有 sync"
 
           # ============================================================
           # Build
@@ -2230,7 +2269,7 @@ jobs:
           echo "${BTF_HELPER_O:-未找到}"
 
           # ============================================================
-          # helper DWARF 诊断
+          # helper DWARF
           # ============================================================
 
           if [ -n "$BTF_HELPER_O" ]; then
@@ -2307,7 +2346,6 @@ jobs:
             done
 
             echo ""
-
             echo "=== Unified helper target DWARF snippets ==="
 
             head -n 500 \
@@ -2321,7 +2359,7 @@ jobs:
           fi
 
           # ============================================================
-          # 检查 BTFIDS 前保存下来的 vmlinux
+          # BTFIDS 前保存的文件
           # ============================================================
 
           echo "=== BTFIDS pre-image diagnostics ==="
@@ -2346,6 +2384,10 @@ jobs:
 
           } > "$BTF_DIAG_FILE"
 
+          # ============================================================
+          # 保存的最终 vmlinux
+          # ============================================================
+
           if [ -f "$SAVED_VMLINUX" ]; then
 
             echo "✅ 找到 BTFIDS 前的 vmlinux:"
@@ -2353,8 +2395,13 @@ jobs:
 
             {
               echo "=== vmlinux file ==="
-              ls -lh "$SAVED_VMLINUX" || true
-              file "$SAVED_VMLINUX" || true
+
+              ls -lh "$SAVED_VMLINUX" \
+                || true
+
+              file "$SAVED_VMLINUX" \
+                || true
+
               echo ""
 
               echo "=== vmlinux BTF sections ==="
@@ -2370,9 +2417,14 @@ jobs:
 
             } | tee -a "$BTF_DIAG_FILE"
 
+            # ========================================================
+            # 尝试寻找 bpftool
+            # ========================================================
+
             echo "=== Discover bpftool ==="
 
-            BPFTOOL_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
+            BPFTOOL_BIN=$(find \
+              "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
               -type f \
               -name bpftool \
               -perm -111 \
@@ -2382,9 +2434,7 @@ jobs:
             echo "${BPFTOOL_BIN:-未找到}"
 
             # ========================================================
-            # bpftool：最重要的检查
-            #
-            # 直接读取 BTFIDS 前 vmlinux 的 .BTF。
+            # bpftool BTF dump
             # ========================================================
 
             if [ -n "$BPFTOOL_BIN" ]; then
@@ -2442,7 +2492,7 @@ jobs:
             fi
 
             # ========================================================
-            # pahole 直接读取 vmlinux 中的 BTF
+            # pahole 从 BTF 读取
             # ========================================================
 
             echo "=== pahole BTF target types ==="
@@ -2466,7 +2516,7 @@ jobs:
             } | tee -a "$BTF_DIAG_FILE"
 
             # ========================================================
-            # strings 只是辅助，不作为 BTF 是否存在的最终依据
+            # strings 仅辅助
             # ========================================================
 
             echo "=== Raw target type strings ==="
@@ -2495,7 +2545,7 @@ jobs:
           fi
 
           # ============================================================
-          # 检查单独保存的 .btf.vmlinux.bin.o
+          # .btf.vmlinux.bin.o
           # ============================================================
 
           if [ -f "$SAVED_BTF_BIN" ]; then
@@ -2505,8 +2555,11 @@ jobs:
             {
               echo "=== Saved .btf.vmlinux.bin.o ==="
 
-              ls -lh "$SAVED_BTF_BIN" || true
-              file "$SAVED_BTF_BIN" || true
+              ls -lh "$SAVED_BTF_BIN" \
+                || true
+
+              file "$SAVED_BTF_BIN" \
+                || true
 
               readelf -S \
                 "$SAVED_BTF_BIN" \
@@ -2551,9 +2604,6 @@ jobs:
 
           # ============================================================
           # .tmp_vmlinux.btf
-          #
-          # 这个是 pahole 输入的 DWARF vmlinux。
-          # 如果存在也一起保留。
           # ============================================================
 
           if [ -f "$SAVED_TMP_BTF" ]; then
@@ -2563,8 +2613,11 @@ jobs:
             {
               echo "=== Saved .tmp_vmlinux.btf ==="
 
-              ls -lh "$SAVED_TMP_BTF" || true
-              file "$SAVED_TMP_BTF" || true
+              ls -lh "$SAVED_TMP_BTF" \
+                || true
+
+              file "$SAVED_TMP_BTF" \
+                || true
 
               echo ""
 
@@ -2592,24 +2645,31 @@ jobs:
           fi
 
           # ============================================================
-          # Build log 中确认 SAVEBTF 是否真的发生
+          # 确认 SAVEBTF 后真正发生了什么
           # ============================================================
 
           echo "=== Verify SAVEBTF execution ==="
 
           grep -n \
-            -B 5 \
-            -A 10 \
+            -B 8 \
+            -A 20 \
             'SAVEBTF' \
+            "$BUILD_LOG" \
+            | tail -n 160 \
+            || true
+
+          echo ""
+
+          echo "=== Runtime unresolved symbols ==="
+
+          grep -n \
+            'FAILED unresolved symbol' \
             "$BUILD_LOG" \
             | tail -n 100 \
             || true
 
           # ============================================================
           # 编译产物
-          #
-          # OPPO 外层脚本可能返回 0，
-          # 所以 Image / Image.lz4 才是最终成功依据。
           # ============================================================
 
           IMAGE=$(find ./kernel_platform/out \
@@ -2636,6 +2696,10 @@ jobs:
           echo "Image.lz4 = ${IMAGE_LZ4:-未找到}"
           echo "vmlinux   = ${VMLINUX:-未找到}"
 
+          # ============================================================
+          # 最终判断
+          # ============================================================
+
           if [ -z "$IMAGE" ] && [ -z "$IMAGE_LZ4" ]; then
 
             echo ""
@@ -2660,6 +2724,7 @@ jobs:
           fi
 
           echo ""
+
           echo "✅ 内核编译成功"
 
           echo "=== 最终内核文件 ==="
@@ -2703,9 +2768,9 @@ jobs:
           echo "================ 关键错误 ================="
 
           grep -nEi \
-            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|SAVEBTF|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock|btf_xdp_buff_emit|standalone-debug|thinlto|flto|CC_FLAGS_LTO|CFLAGS_REMOVE|seq_file|bpf_prog|Segmentation fault|Killed' \
+            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|SAVEBTF|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock|btf_xdp_buff_emit|standalone-debug|thinlto|flto|CC_FLAGS_LTO|CFLAGS_REMOVE|seq_file|bpf_prog|Segmentation fault|Killed|sync: not found' \
             "$LOG" \
-            | tail -n 550 \
+            | tail -n 600 \
             || true
 
           echo ""
@@ -2715,7 +2780,7 @@ jobs:
           grep -nEi \
             'CC +kernel/btf_xdp_buff_emit.o|btf_xdp_buff_emit|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock' \
             "$LOG" \
-            | tail -n 350 \
+            | tail -n 400 \
             || true
 
           echo ""
@@ -2723,9 +2788,9 @@ jobs:
           echo "================ BTF 编译阶段 ================="
 
           grep -nEi \
-            'CC +kernel/btf_xdp_buff_emit.o|LD +\.tmp_vmlinux\.btf|BTF +\.btf\.vmlinux\.bin\.o|LD +vmlinux|SAVEBTF|BTFIDS +vmlinux' \
+            'CC +kernel/btf_xdp_buff_emit.o|LD +\.tmp_vmlinux\.btf|BTF +\.btf\.vmlinux\.bin\.o|LD +vmlinux|SAVEBTF|BTFIDS +vmlinux|FAILED unresolved symbol' \
             "$LOG" \
-            | tail -n 300 \
+            | tail -n 350 \
             || true
 
           echo ""
@@ -2733,11 +2798,11 @@ jobs:
           echo "================ SAVEBTF 附近 ================="
 
           grep -n \
-            -B 20 \
-            -A 30 \
+            -B 30 \
+            -A 50 \
             'SAVEBTF' \
             "$LOG" \
-            | tail -n 180 \
+            | tail -n 260 \
             || true
 
           echo ""
@@ -2745,11 +2810,11 @@ jobs:
           echo "================ BTFIDS 附近 ================="
 
           grep -n \
-            -B 55 \
-            -A 75 \
+            -B 60 \
+            -A 90 \
             'BTFIDS  vmlinux' \
             "$LOG" \
-            | tail -n 380 \
+            | tail -n 420 \
             || true
 
           echo ""
@@ -2764,12 +2829,22 @@ jobs:
 
           echo ""
 
+          echo "================ sync 错误检查 ================="
+
+          grep -n \
+            'sync: not found' \
+            "$LOG" \
+            | tail -n 50 \
+            || true
+
+          echo ""
+
           echo "================ 8 个目标类型 ================="
 
           grep -nEi \
             'xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock' \
             "$LOG" \
-            | tail -n 400 \
+            | tail -n 450 \
             || true
 
           echo ""
@@ -2779,7 +2854,7 @@ jobs:
           grep -nEi \
             'standalone-debug|CC_FLAGS_LTO|CFLAGS_REMOVE|thinlto|flto' \
             "$LOG" \
-            | tail -n 300 \
+            | tail -n 320 \
             || true
 
           echo ""
@@ -2789,7 +2864,7 @@ jobs:
           grep -nEi \
             'tag__recode_dwarf_type|ftype__recode_dwarf_types|lexblock__recode_dwarf_types|couldn.t find.*type' \
             "$LOG" \
-            | tail -n 250 \
+            | tail -n 280 \
             || true
 
           if [ -f "$BTF_DIAG_FILE" ]; then
@@ -2797,17 +2872,17 @@ jobs:
             echo ""
             echo "================ BTFIDS 前 vmlinux BTF 诊断 ================="
 
-            cat "$BTF_DIAG_FILE" \
-              | tail -n 1200 \
+            tail -n 1500 \
+              "$BTF_DIAG_FILE" \
               || true
 
           fi
 
           echo ""
 
-          echo "================ 最后 700 行 ================"
+          echo "================ 最后 800 行 ================"
 
-          tail -n 700 \
+          tail -n 800 \
             "$LOG" \
             || true
 

@@ -1481,6 +1481,7 @@ jobs:
           #   FAILED unresolved symbol tcp_sock
           #   FAILED unresolved symbol tcp_request_sock
           #   FAILED unresolved symbol tcp6_sock
+          #   FAILED unresolved symbol netlink_sock
           #
           # 强制把这些类型写入 DWARF / BTF。
           # ============================================================
@@ -1675,7 +1676,7 @@ jobs:
             || true
 
           # ============================================================
-          # 确认 struct tcp_sock
+          # struct tcp_sock
           # ============================================================
           echo "=== Check struct tcp_sock ==="
 
@@ -1750,8 +1751,6 @@ jobs:
 
           # ============================================================
           # 自动查找 struct tcp6_sock
-          #
-          # 不硬编码头文件位置。
           # ============================================================
           echo "=== Search struct tcp6_sock ==="
 
@@ -1793,6 +1792,84 @@ jobs:
             || true
 
           # ============================================================
+          # 自动查找 struct netlink_sock
+          #
+          # 重点：
+          # netlink_sock 是 netlink 内部结构，
+          # 不保证位于 common/include。
+          #
+          # Linux 5.10 中通常可能位于：
+          #
+          #   net/netlink/af_netlink.h
+          #
+          # 因此这里扫描整个 common 树里的 .h 文件。
+          # ============================================================
+          echo "=== Search struct netlink_sock ==="
+
+          NETLINK_HEADER=$(grep -RslE \
+            'struct[[:space:]]+netlink_sock[[:space:]]*\{' \
+            "$COMMON_DIR" \
+            --include='*.h' \
+            2>/dev/null \
+            | head -n 1)
+
+          if [ -z "$NETLINK_HEADER" ]; then
+
+            echo "❌ 找不到 struct netlink_sock 的定义"
+
+            echo "=== netlink_sock 全源码搜索结果 ==="
+
+            grep -Rns \
+              "netlink_sock" \
+              "$COMMON_DIR" \
+              --include='*.h' \
+              --include='*.c' \
+              2>/dev/null \
+              | head -n 100 \
+              || true
+
+            exit 1
+
+          fi
+
+          echo "✅ 找到 struct netlink_sock:"
+          echo "$NETLINK_HEADER"
+
+          grep -n \
+            "struct netlink_sock" \
+            "$NETLINK_HEADER" \
+            | head -n 20 \
+            || true
+
+          # ============================================================
+          # netlink_sock 的头文件可能不在 include/ 目录。
+          #
+          # BTF emit 文件位于：
+          #
+          #   common/kernel/btf_xdp_buff_emit.c
+          #
+          # 所以生成一个相对于 common/kernel 的路径。
+          #
+          # 例如：
+          #
+          #   ../net/netlink/af_netlink.h
+          # ============================================================
+          NETLINK_HEADER_REL=$(realpath \
+            --relative-to="$COMMON_DIR/kernel" \
+            "$NETLINK_HEADER")
+
+          if [ -z "$NETLINK_HEADER_REL" ]; then
+
+            echo "❌ 无法生成 netlink_sock 头文件相对路径"
+
+            exit 1
+
+          fi
+
+          echo "✅ netlink_sock 相对 include 路径:"
+          echo "$NETLINK_HEADER_REL"
+
+          # ============================================================
           # 确认 BTF_TYPE_EMIT
           # ============================================================
           if ! grep -Rq \
@@ -1817,12 +1894,6 @@ jobs:
 
           # ============================================================
           # 创建 BTF emit 源文件
-          #
-          # linux/btf.h 在当前 Android 12 / Linux 5.10 内核中
-          # 对 struct seq_file / struct bpf_prog 的声明不完整，
-          # 所以必须提前 forward declare。
-          #
-          # heredoc 允许展开自动检测到的头文件路径。
           # ============================================================
           cat > "$BTF_EMIT_C" <<EOF
           // SPDX-License-Identifier: GPL-2.0
@@ -1839,6 +1910,7 @@ jobs:
            *   FAILED unresolved symbol tcp_sock
            *   FAILED unresolved symbol tcp_request_sock
            *   FAILED unresolved symbol tcp6_sock
+           *   FAILED unresolved symbol netlink_sock
            */
 
           #include <linux/compiler.h>
@@ -1883,6 +1955,13 @@ jobs:
            */
           #include <${TCP6_HEADER_REL}>
 
+          /*
+           * struct netlink_sock
+           *
+           * This may be an internal net/netlink header.
+           */
+          #include "${NETLINK_HEADER_REL}"
+
           static __used noinline void btf_force_emit_required_types(void)
           {
               BTF_TYPE_EMIT(struct xdp_buff);
@@ -1892,6 +1971,7 @@ jobs:
               BTF_TYPE_EMIT(struct tcp_sock);
               BTF_TYPE_EMIT(struct tcp_request_sock);
               BTF_TYPE_EMIT(struct tcp6_sock);
+              BTF_TYPE_EMIT(struct netlink_sock);
           }
           EOF
 
@@ -1931,8 +2011,15 @@ jobs:
           # 修复 Android 12 / Kernel 5.10 host 构建环境
           #
           # clang-12 链接 resolve_btfids 时会寻找 ld。
-          # Android / OPPO build 又会重置 PATH，
-          # 所以把 ld / dd / printf 放入其固定 build-tools PATH。
+          # Android / OPPO build 又会重置 PATH。
+          #
+          # 所以把：
+          #
+          #   ld
+          #   dd
+          #   printf
+          #
+          # 放入 Android 固定 build-tools PATH。
           # ============================================================
           echo "=== Fix host build tools ==="
 
@@ -2099,8 +2186,8 @@ jobs:
           # ============================================================
           # 检查真正的编译产物
           #
-          # OPPO 外层脚本可能吞掉内部 make 错误，
-          # 所以不能只相信 BUILD_STATUS。
+          # OPPO 外层脚本可能吞掉内部 make 错误。
+          # 因此不能只看 BUILD_STATUS。
           # ============================================================
           IMAGE=$(find ./kernel_platform/out \
             -type f \
@@ -2199,7 +2286,7 @@ jobs:
           echo "================ 关键错误 ================="
 
           grep -nEi \
-            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
+            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
             "$LOG" \
             | tail -n 150 \
             || true

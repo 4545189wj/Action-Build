@@ -1451,50 +1451,43 @@ jobs:
           # ============================================================
 
           BUILD_LOG="$GITHUB_WORKSPACE/kernel-build.log"
+
           STATUS_FILE="$GITHUB_WORKSPACE/kernel-build-status.txt"
 
-          SAVED_VMLINUX="$GITHUB_WORKSPACE/vmlinux-before-btfids"
-          SAVED_BTF_BIN="$GITHUB_WORKSPACE/btf-bin-before-btfids.o"
-          SAVED_TMP_BTF="$GITHUB_WORKSPACE/tmp-vmlinux-btf-before-btfids"
-
-          RAW_BTF_SECTION="$GITHUB_WORKSPACE/raw-btf-before-btfids.bin"
-          FINAL_RAW_BTF="$GITHUB_WORKSPACE/raw-vmlinux-btf-before-btfids.bin"
-
-          BTF_RAW_TYPES_FILE="$GITHUB_WORKSPACE/btf-raw-types.txt"
-          FINAL_BTF_RAW_TYPES_FILE="$GITHUB_WORKSPACE/vmlinux-btf-raw-types.txt"
-
-          BTF_COMPARE_FILE="$GITHUB_WORKSPACE/btf-compare.txt"
-          BTF_ID_SYMBOLS_FILE="$GITHUB_WORKSPACE/btf-id-symbols.txt"
-
           RESOLVE_BTFIDS_PATCH_FILE="$GITHUB_WORKSPACE/resolve-btfids-patch.txt"
+
           RESOLVE_BTFIDS_DEBUG_FILE="$GITHUB_WORKSPACE/resolve-btfids-debug.txt"
 
-          BTF_HELPER_TYPES_FILE="$GITHUB_WORKSPACE/btf-helper-types.txt"
+          BTF_ID_SYMBOLS_FILE="$GITHUB_WORKSPACE/btf-id-symbols.txt"
+
           BTF_HELPER_DWARF_FILE="$GITHUB_WORKSPACE/btf-helper-dwarf.txt"
 
-          BTF_PARSER="$GITHUB_WORKSPACE/parse-raw-btf.py"
+          BTF_HELPER_TYPES_FILE="$GITHUB_WORKSPACE/btf-helper-types.txt"
+
+          SAVED_VMLINUX="$GITHUB_WORKSPACE/vmlinux-before-btfids"
+
+          SAVED_BTF_BIN="$GITHUB_WORKSPACE/btf-bin-before-btfids.o"
+
+          SAVED_TMP_BTF="$GITHUB_WORKSPACE/tmp-vmlinux-btf-before-btfids"
+
+          # ============================================================
+          # Clear old diagnostics
+          # ============================================================
 
           rm -f "$BUILD_LOG"
           rm -f "$STATUS_FILE"
 
-          rm -f "$SAVED_VMLINUX"
-          rm -f "$SAVED_BTF_BIN"
-          rm -f "$SAVED_TMP_BTF"
-
-          rm -f "$RAW_BTF_SECTION"
-          rm -f "$FINAL_RAW_BTF"
-
-          rm -f "$BTF_RAW_TYPES_FILE"
-          rm -f "$FINAL_BTF_RAW_TYPES_FILE"
-
-          rm -f "$BTF_COMPARE_FILE"
-          rm -f "$BTF_ID_SYMBOLS_FILE"
-
           rm -f "$RESOLVE_BTFIDS_PATCH_FILE"
           rm -f "$RESOLVE_BTFIDS_DEBUG_FILE"
 
-          rm -f "$BTF_HELPER_TYPES_FILE"
+          rm -f "$BTF_ID_SYMBOLS_FILE"
+
           rm -f "$BTF_HELPER_DWARF_FILE"
+          rm -f "$BTF_HELPER_TYPES_FILE"
+
+          rm -f "$SAVED_VMLINUX"
+          rm -f "$SAVED_BTF_BIN"
+          rm -f "$SAVED_TMP_BTF"
 
           # ============================================================
           # pahole
@@ -1502,7 +1495,8 @@ jobs:
 
           echo "=== Detect BTF tool ==="
 
-          PAHOLE_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
+          PAHOLE_BIN=$(find \
+            "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
             -type f \
             -path "*/kernel-build-tools/linux-x86/bin/pahole" \
             -perm -111 \
@@ -1517,6 +1511,7 @@ jobs:
           else
 
             echo "⚠️ 没找到 Android prebuilt pahole"
+
             echo "⚠️ fallback 到 /usr/local/bin/pahole"
 
             PAHOLE_BIN="/usr/local/bin/pahole"
@@ -1526,6 +1521,7 @@ jobs:
           if [ ! -x "$PAHOLE_BIN" ]; then
 
             echo "❌ pahole 不存在或不可执行:"
+
             echo "$PAHOLE_BIN"
 
             exit 1
@@ -1557,6 +1553,7 @@ jobs:
             if [ ! -f "$REQUIRED_FILE" ]; then
 
               echo "❌ 找不到必要文件:"
+
               echo "$REQUIRED_FILE"
 
               exit 1
@@ -1566,7 +1563,7 @@ jobs:
           done
 
           # ============================================================
-          # Find type definitions
+          # xdp_buff
           # ============================================================
 
           echo "=== Check struct xdp_buff ==="
@@ -1576,10 +1573,14 @@ jobs:
             "$XDP_HEADER"; then
 
             echo "❌ 找不到 struct xdp_buff"
+
             exit 1
 
           fi
 
+          # ============================================================
+          # udp_sock
+          # ============================================================
 
           echo "=== Check struct udp_sock ==="
 
@@ -1588,10 +1589,14 @@ jobs:
             "$UDP_HEADER"; then
 
             echo "❌ 找不到 struct udp_sock"
+
             exit 1
 
           fi
 
+          # ============================================================
+          # udp6_sock
+          # ============================================================
 
           echo "=== Search struct udp6_sock ==="
 
@@ -1604,12 +1609,16 @@ jobs:
           if [ -z "$UDP6_HEADER" ]; then
 
             echo "❌ 找不到 struct udp6_sock"
+
             exit 1
 
           fi
 
           UDP6_HEADER_REL="${UDP6_HEADER#$COMMON_DIR/include/}"
 
+          # ============================================================
+          # tcp_timewait_sock
+          # ============================================================
 
           echo "=== Search struct tcp_timewait_sock ==="
 
@@ -1622,12 +1631,16 @@ jobs:
           if [ -z "$TCP_TW_HEADER" ]; then
 
             echo "❌ 找不到 struct tcp_timewait_sock"
+
             exit 1
 
           fi
 
           TCP_TW_HEADER_REL="${TCP_TW_HEADER#$COMMON_DIR/include/}"
 
+          # ============================================================
+          # tcp_sock
+          # ============================================================
 
           echo "=== Check struct tcp_sock ==="
 
@@ -1636,10 +1649,14 @@ jobs:
             "$TCP_TW_HEADER"; then
 
             echo "❌ 找不到 struct tcp_sock"
+
             exit 1
 
           fi
 
+          # ============================================================
+          # tcp_request_sock
+          # ============================================================
 
           echo "=== Search struct tcp_request_sock ==="
 
@@ -1652,12 +1669,16 @@ jobs:
           if [ -z "$TCP_REQ_HEADER" ]; then
 
             echo "❌ 找不到 struct tcp_request_sock"
+
             exit 1
 
           fi
 
           TCP_REQ_HEADER_REL="${TCP_REQ_HEADER#$COMMON_DIR/include/}"
 
+          # ============================================================
+          # tcp6_sock
+          # ============================================================
 
           echo "=== Search struct tcp6_sock ==="
 
@@ -1670,12 +1691,16 @@ jobs:
           if [ -z "$TCP6_HEADER" ]; then
 
             echo "❌ 找不到 struct tcp6_sock"
+
             exit 1
 
           fi
 
           TCP6_HEADER_REL="${TCP6_HEADER#$COMMON_DIR/include/}"
 
+          # ============================================================
+          # netlink_sock
+          # ============================================================
 
           echo "=== Check struct netlink_sock ==="
 
@@ -1690,12 +1715,19 @@ jobs:
           fi
 
           echo "✅ xdp_buff"
+
           echo "✅ udp_sock"
+
           echo "✅ udp6_sock -> $UDP6_HEADER_REL"
+
           echo "✅ tcp_timewait_sock -> $TCP_TW_HEADER_REL"
+
           echo "✅ tcp_sock"
+
           echo "✅ tcp_request_sock -> $TCP_REQ_HEADER_REL"
+
           echo "✅ tcp6_sock -> $TCP6_HEADER_REL"
+
           echo "✅ netlink_sock -> net/netlink/af_netlink.h"
 
           # ============================================================
@@ -1707,10 +1739,15 @@ jobs:
           cat > "$BTF_EMIT_C" <<EOF
           // SPDX-License-Identifier: GPL-2.0
           /*
-           * Unified DWARF/BTF networking type retention helper.
+           * Unified DWARF/BTF type retention helper.
            *
-           * This translation unit is compiled with standalone debug
-           * information and without ThinLTO.
+           * This translation unit is compiled with:
+           *
+           *   -fstandalone-debug
+           *
+           * and without:
+           *
+           *   \$(CC_FLAGS_LTO)
            */
 
           #include <linux/compiler.h>
@@ -1768,7 +1805,8 @@ jobs:
             'obj-$(CONFIG_DEBUG_INFO_BTF) += btf_xdp_buff_emit.o' \
             "$KERNEL_MAKEFILE"; then
 
-            echo "" >> "$KERNEL_MAKEFILE"
+            echo "" \
+              >> "$KERNEL_MAKEFILE"
 
             echo \
               '# Unified required networking BTF types' \
@@ -1794,6 +1832,36 @@ jobs:
             'btf_xdp_buff_emit|CFLAGS_REMOVE_btf_xdp_buff_emit' \
             "$KERNEL_MAKEFILE" \
             || true
+
+          if ! grep -qF \
+            'obj-$(CONFIG_DEBUG_INFO_BTF) += btf_xdp_buff_emit.o' \
+            "$KERNEL_MAKEFILE"; then
+
+            echo "❌ helper object missing from Makefile"
+
+            exit 1
+
+          fi
+
+          if ! grep -qF \
+            'CFLAGS_btf_xdp_buff_emit.o += -fstandalone-debug' \
+            "$KERNEL_MAKEFILE"; then
+
+            echo "❌ helper standalone-debug missing"
+
+            exit 1
+
+          fi
+
+          if ! grep -qF \
+            'CFLAGS_REMOVE_btf_xdp_buff_emit.o += $(CC_FLAGS_LTO)' \
+            "$KERNEL_MAKEFILE"; then
+
+            echo "❌ helper LTO removal missing"
+
+            exit 1
+
+          fi
 
           for TYPE in \
             xdp_buff \
@@ -1823,29 +1891,24 @@ jobs:
           # ============================================================
           # PATCH resolve_btfids
           #
-          # 原始代码：
+          # 保留原来的：
           #
-          #   if (btf_is_struct(type) && nr_structs)
+          #   btf_is_struct(type) && nr_structs
           #
-          # 以及：
+          # 等 gating。
           #
-          #   if (id) {
-          #       id->id = type_id;
-          #       (*nr)--;
-          #   }
+          # 只修复：
           #
-          # 修复：
+          #   同一个 requested symbol 被重复 BTF type 再次命中时，
+          #   不应该再次执行 (*nr)--。
           #
-          # 1. 不再使用 nr_* == 0 来阻止后续同 kind 类型查找。
-          #
-          # 2. 同一个 id 只有第一次 resolve 时才 decrement。
-          #
-          # 3. tcp6_sock / netlink_sock 打印 BTFDBG。
+          # 使用正则，不依赖 Tab / spaces。
           # ============================================================
 
           echo "=== Patch resolve_btfids duplicate-safe resolver ==="
 
           python3 - "$RESOLVE_BTFIDS_SRC" <<'PY'
+          import re
           import sys
           from pathlib import Path
 
@@ -1855,6 +1918,10 @@ jobs:
 
           marker = "BTF_DUPLICATE_SAFE_RESOLVE_PATCH"
 
+          # ============================================================
+          # 如果已经 patch，直接退出。
+          # ============================================================
+
           if marker in text:
 
               print(
@@ -1863,97 +1930,57 @@ jobs:
 
               sys.exit(0)
 
-          replacements = [
-              (
-                  "if (btf_is_func(type) && nr_funcs) {",
-                  "if (btf_is_func(type)) {",
-              ),
-              (
-                  "} else if (btf_is_struct(type) && nr_structs) {",
-                  "} else if (btf_is_struct(type)) {",
-              ),
-              (
-                  "} else if (btf_is_union(type) && nr_unions) {",
-                  "} else if (btf_is_union(type)) {",
-              ),
-              (
-                  "} else if (btf_is_typedef(type) && nr_typedefs) {",
-                  "} else if (btf_is_typedef(type)) {",
-              ),
-          ]
+          # ============================================================
+          # 匹配真实源码：
+          #
+          #   id = btf_id__find(root, str);
+          #   if (id) {
+          #       id->id = type_id;
+          #       (*nr)--;
+          #   }
+          #
+          # 缩进允许任意 Tab / spaces。
+          # ============================================================
 
-          for old, new in replacements:
+          pattern = re.compile(
+              r'^(?P<indent>[ \t]*)'
+              r'id = btf_id__find\(root, str\);[ \t]*\n'
 
-              count = text.count(old)
+              r'(?P=indent)'
+              r'if \(id\) \{[ \t]*\n'
 
-              if count != 1:
+              r'(?P<inner>[ \t]+)'
+              r'id->id = type_id;[ \t]*\n'
 
-                  print(
-                      "ERROR: unexpected resolve_btfids source"
-                  )
+              r'(?P=inner)'
+              r'\(\*nr\)--;[ \t]*\n'
 
-                  print(
-                      f"wanted exactly one occurrence:"
-                  )
+              r'(?P=indent)'
+              r'\}[ \t]*$',
 
-                  print(
-                      old
-                  )
+              re.MULTILINE,
+          )
 
-                  print(
-                      f"found={count}"
-                  )
+          matches = list(
+              pattern.finditer(text)
+          )
 
-                  sys.exit(1)
+          if len(matches) != 1:
 
-              text = text.replace(
-                  old,
-                  new,
-                  1,
-              )
-
-          old_resolve = """\
-                  id = btf_id__find(root, str);
-                  if (id) {
-                          id->id = type_id;
-                          (*nr)--;
-                  }
-          """
-
-          new_resolve = """\
-                  id = btf_id__find(root, str);
-
-                  /*
-                   * BTF_DUPLICATE_SAFE_RESOLVE_PATCH
-                   *
-                   * A BTF file may contain multiple records with the
-                   * same name/kind. Count a requested symbol only once.
-                   *
-                   * Also do not let a stale/early nr_* == 0 prevent a
-                   * later matching BTF type from being resolved.
-                   */
-                  if (id && !id->id) {
-                          id->id = type_id;
-
-                          if (*nr > 0)
-                                  (*nr)--;
-
-                          if (!strcmp(id->name, "tcp6_sock") ||
-                              !strcmp(id->name, "netlink_sock"))
-                                  pr_err("BTFDBG resolved %s -> %d remaining=%d\\n",
-                                         id->name, type_id, *nr);
-                  }
-          """
-
-          if old_resolve not in text:
-
+              print("")
               print(
-                  "ERROR: could not find original "
+                  "ERROR: could not uniquely match "
                   "btf_id__find resolve block"
               )
 
+              print(
+                  f"regex matches={len(matches)}"
+              )
+
               print("")
-              print("=== nearby source ===")
+              print(
+                  "=== nearby source ==="
+              )
 
               lines = text.splitlines()
 
@@ -1961,33 +1988,222 @@ jobs:
                   lines,
                   1
               ):
-                  if "btf_id__find(root, str)" in line:
+
+                  if (
+                      "btf_id__find(root, str)"
+                      in line
+                  ):
 
                       start = max(
                           0,
-                          number - 12,
+                          number - 15
                       )
 
                       end = min(
                           len(lines),
-                          number + 18,
+                          number + 20
                       )
 
-                      for n in range(
+                      for index in range(
                           start,
                           end
                       ):
+
                           print(
-                              f"{n + 1}: {lines[n]}"
+                              f"{index + 1}: "
+                              f"{lines[index]!r}"
                           )
 
               sys.exit(1)
 
-          text = text.replace(
-              old_resolve,
-              new_resolve,
-              1,
+          match = matches[0]
+
+          indent = match.group(
+              "indent"
           )
+
+          inner = match.group(
+              "inner"
+          )
+
+          # 在 inner 基础上再增加一级缩进。
+          if "\t" in inner:
+
+              deeper = inner + "\t"
+
+          else:
+
+              deeper = inner + "    "
+
+          replacement = (
+              f"{indent}"
+              "id = btf_id__find(root, str);\n"
+
+              "\n"
+
+              f"{indent}"
+              "/*\n"
+
+              f"{indent}"
+              " * BTF_DUPLICATE_SAFE_RESOLVE_PATCH\n"
+
+              f"{indent}"
+              " *\n"
+
+              f"{indent}"
+              " * Multiple BTF records may have the same\n"
+
+              f"{indent}"
+              " * requested name/kind. Resolve and decrement\n"
+
+              f"{indent}"
+              " * the remaining counter only once.\n"
+
+              f"{indent}"
+              " */\n"
+
+              f"{indent}"
+              "if (id && !id->id) {\n"
+
+              f"{inner}"
+              "id->id = type_id;\n"
+
+              "\n"
+
+              f"{inner}"
+              "if (*nr > 0)\n"
+
+              f"{deeper}"
+              "(*nr)--;\n"
+
+              "\n"
+
+              f"{inner}"
+              "if (!strcmp(id->name, \"tcp6_sock\") ||\n"
+
+              f"{deeper}"
+              "!strcmp(id->name, \"netlink_sock\"))\n"
+
+              f"{deeper}"
+              "pr_err(\"BTFDBG resolved %s -> %d "
+              "remaining=%d\\n\",\n"
+
+              f"{deeper}"
+              "       id->name, type_id, *nr);\n"
+
+              f"{indent}"
+              "} else if (id && id->id) {\n"
+
+              f"{inner}"
+              "if (!strcmp(id->name, \"tcp6_sock\") ||\n"
+
+              f"{deeper}"
+              "!strcmp(id->name, \"netlink_sock\"))\n"
+
+              f"{deeper}"
+              "pr_err(\"BTFDBG duplicate %s keep=%d "
+              "ignore=%d remaining=%d\\n\",\n"
+
+              f"{deeper}"
+              "       id->name, id->id, "
+              "type_id, *nr);\n"
+
+              f"{indent}"
+              "}"
+          )
+
+          # 使用 lambda，避免 re.sub 对 replacement 中的
+          # \n 再做一次转义解析。
+          text, replace_count = pattern.subn(
+              lambda unused_match: replacement,
+              text,
+              count=1,
+          )
+
+          if replace_count != 1:
+
+              print(
+                  "ERROR: resolve block replacement failed"
+              )
+
+              sys.exit(1)
+
+          # ============================================================
+          # 修改结果验证
+          # ============================================================
+
+          required = [
+              "BTF_DUPLICATE_SAFE_RESOLVE_PATCH",
+
+              "if (id && !id->id)",
+
+              'BTFDBG resolved %s -> %d remaining=%d',
+
+              'BTFDBG duplicate %s keep=%d ignore=%d remaining=%d',
+          ]
+
+          for item in required:
+
+              if item not in text:
+
+                  print(
+                      "ERROR: patched source missing:"
+                  )
+
+                  print(
+                      item
+                  )
+
+                  sys.exit(1)
+
+          # 原始 block 不应再存在。
+          old_pattern = re.compile(
+              r'id = btf_id__find\(root, str\);'
+              r'[ \t]*\n'
+              r'[ \t]*if \(id\) \{'
+              r'[ \t]*\n'
+              r'[ \t]*id->id = type_id;'
+              r'[ \t]*\n'
+              r'[ \t]*\(\*nr\)--;'
+          )
+
+          if old_pattern.search(text):
+
+              print(
+                  "ERROR: old duplicate-unsafe block "
+                  "still exists"
+              )
+
+              sys.exit(1)
+
+          # ============================================================
+          # 保证这一版没有取消原来的 gating。
+          # ============================================================
+
+          gating = [
+              "btf_is_func(type) && nr_funcs",
+              "btf_is_struct(type) && nr_structs",
+              "btf_is_union(type) && nr_unions",
+              "btf_is_typedef(type) && nr_typedefs",
+          ]
+
+          for item in gating:
+
+              if item not in text:
+
+                  print(
+                      "ERROR: original kind gating missing:"
+                  )
+
+                  print(
+                      item
+                  )
+
+                  sys.exit(1)
+
+          # ============================================================
+          # 所有验证成功后才写回。
+          # ============================================================
 
           path.write_text(
               text
@@ -1996,12 +2212,67 @@ jobs:
           print(
               "✅ resolve_btfids duplicate-safe patch applied"
           )
+
+          print("")
+          print(
+              "=== Patched block ==="
+          )
+
+          patched_lines = text.splitlines()
+
+          for number, line in enumerate(
+              patched_lines,
+              1
+          ):
+
+              if marker in line:
+
+                  start = max(
+                      0,
+                      number - 15
+                  )
+
+                  end = min(
+                      len(patched_lines),
+                      number + 45
+                  )
+
+                  for index in range(
+                      start,
+                      end
+                  ):
+
+                      print(
+                          f"{index + 1}: "
+                          f"{patched_lines[index]}"
+                      )
+
+                  break
           PY
+
+          # ============================================================
+          # Force resolve_btfids rebuild
+          # ============================================================
 
           touch "$RESOLVE_BTFIDS_SRC"
 
+          echo "=== Remove stale resolve_btfids build outputs ==="
+
+          find \
+            "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/out" \
+            -type f \
+            \( \
+              -path '*/tools/bpf/resolve_btfids/resolve_btfids' \
+              -o \
+              -path '*/tools/bpf/resolve_btfids/main.o' \
+            \) \
+            -print \
+            -delete \
+            2>/dev/null \
+            || true
+
           # ============================================================
-          # Verify resolve_btfids patch
+          # Verify resolver source
           # ============================================================
 
           echo "=== Verify resolve_btfids patch ==="
@@ -2011,23 +2282,32 @@ jobs:
             echo ""
 
             grep -n \
-              -B 25 \
-              -A 40 \
+              -B 30 \
+              -A 65 \
               'BTF_DUPLICATE_SAFE_RESOLVE_PATCH' \
               "$RESOLVE_BTFIDS_SRC" \
               || true
 
             echo ""
 
-            echo "=== Kind gating after patch ==="
+            echo "=== Original kind gating ==="
 
             grep -nE \
               'btf_is_(func|struct|union|typedef)\(type\)' \
               "$RESOLVE_BTFIDS_SRC" \
-              | head -n 40 \
+              | head -n 50 \
               || true
 
             echo ""
+
+            echo "=== BTFDBG source ==="
+
+            grep -n \
+              -B 15 \
+              -A 25 \
+              'BTFDBG' \
+              "$RESOLVE_BTFIDS_SRC" \
+              || true
 
           } | tee "$RESOLVE_BTFIDS_PATCH_FILE"
 
@@ -2035,25 +2315,8 @@ jobs:
             'BTF_DUPLICATE_SAFE_RESOLVE_PATCH' \
             "$RESOLVE_BTFIDS_SRC"; then
 
-            echo "❌ resolve_btfids patch marker missing"
-            exit 1
+            echo "❌ patch marker missing"
 
-          fi
-
-          if grep -qF \
-            'btf_is_struct(type) && nr_structs' \
-            "$RESOLVE_BTFIDS_SRC"; then
-
-            echo "❌ nr_structs gating still exists"
-            exit 1
-
-          fi
-
-          if grep -qF \
-            'btf_is_func(type) && nr_funcs' \
-            "$RESOLVE_BTFIDS_SRC"; then
-
-            echo "❌ nr_funcs gating still exists"
             exit 1
 
           fi
@@ -2062,16 +2325,28 @@ jobs:
             'if (id && !id->id)' \
             "$RESOLVE_BTFIDS_SRC"; then
 
-            echo "❌ duplicate-safe id guard missing"
+            echo "❌ duplicate-safe guard missing"
+
             exit 1
 
           fi
 
           if ! grep -qF \
-            'BTFDBG resolved %s -> %d remaining=%d' \
+            'btf_is_struct(type) && nr_structs' \
             "$RESOLVE_BTFIDS_SRC"; then
 
-            echo "❌ BTFDBG missing"
+            echo "❌ original nr_structs gating unexpectedly missing"
+
+            exit 1
+
+          fi
+
+          if ! grep -qF \
+            'btf_is_func(type) && nr_funcs' \
+            "$RESOLVE_BTFIDS_SRC"; then
+
+            echo "❌ original nr_funcs gating unexpectedly missing"
+
             exit 1
 
           fi
@@ -2088,7 +2363,8 @@ jobs:
 
           mkdir -p "$BUILD_TOOLS_BIN"
 
-          LLD_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
+          LLD_BIN=$(find \
+            "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
             -type f \
             -path "*/clang/host/linux-x86/*/bin/ld.lld" \
             -perm -111 \
@@ -2098,23 +2374,44 @@ jobs:
           if [ -z "$LLD_BIN" ]; then
 
             echo "❌ 找不到 Android Clang ld.lld"
+
             exit 1
 
           fi
+
+          echo "✅ Android ld.lld:"
+
+          echo "$LLD_BIN"
 
           ln -sf \
             "$LLD_BIN" \
             "$BUILD_TOOLS_BIN/ld"
 
+          if [ ! -x /usr/bin/dd ]; then
+
+            echo "❌ /usr/bin/dd 不存在"
+
+            exit 1
+
+          fi
+
           ln -sf \
             /usr/bin/dd \
             "$BUILD_TOOLS_BIN/dd"
+
+          if [ ! -x /usr/bin/printf ]; then
+
+            echo "❌ /usr/bin/printf 不存在"
+
+            exit 1
+
+          fi
 
           ln -sf \
             /usr/bin/printf \
             "$BUILD_TOOLS_BIN/printf"
 
-          echo "=== Host aliases ==="
+          echo "=== Host tool aliases ==="
 
           ls -l \
             "$BUILD_TOOLS_BIN/ld" \
@@ -2128,24 +2425,11 @@ jobs:
             | head -n 1
 
           # ============================================================
-          # llvm-objcopy
-          # ============================================================
-
-          LLVM_OBJCOPY_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
-            -type f \
-            -path "*/clang/host/linux-x86/*/bin/llvm-objcopy" \
-            -perm -111 \
-            2>/dev/null \
-            | head -n 1)
-
-          echo "=== llvm-objcopy ==="
-          echo "${LLVM_OBJCOPY_BIN:-未找到}"
-
-          # ============================================================
           # llvm-nm
           # ============================================================
 
-          LLVM_NM_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
+          LLVM_NM_BIN=$(find \
+            "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
             -type f \
             -path "*/clang/host/linux-x86/*/bin/llvm-nm" \
             -perm -111 \
@@ -2160,12 +2444,19 @@ jobs:
           fi
 
           echo "=== nm ==="
+
           echo "${LLVM_NM_BIN:-未找到}"
 
           # ============================================================
           # Patch link-vmlinux.sh
           #
-          # 保存 resolve_btfids 执行前的最终 vmlinux/BTF。
+          # 在真正 ${RESOLVE_BTFIDS} vmlinux 之前保存：
+          #
+          #   vmlinux
+          #   .btf.vmlinux.bin.o
+          #   .tmp_vmlinux.btf
+          #
+          # 不使用 sync。
           # ============================================================
 
           echo "=== Patch link-vmlinux.sh diagnostic save ==="
@@ -2180,6 +2471,10 @@ jobs:
 
           marker = "BTF_DIAG_SAVE_VMLINUX"
 
+          # ============================================================
+          # 删除旧 diagnostic block。
+          # ============================================================
+
           if marker in text:
 
               lines = text.splitlines(
@@ -2189,26 +2484,34 @@ jobs:
               start = None
               end = None
 
-              for i, line in enumerate(lines):
+              for index, line in enumerate(
+                  lines
+              ):
 
                   if marker in line:
 
-                      start = i
+                      start = index
                       break
 
               if start is not None:
 
-                  for i in range(
+                  for index in range(
                       start,
                       len(lines)
                   ):
 
+                      stripped = lines[
+                          index
+                      ].strip()
+
                       if (
-                          "RESOLVE_BTFIDS" in lines[i]
-                          and "vmlinux" in lines[i]
+                          "RESOLVE_BTFIDS"
+                          in stripped
+                          and "vmlinux"
+                          in stripped
                       ):
 
-                          end = i
+                          end = index
                           break
 
                   if end is None:
@@ -2220,9 +2523,18 @@ jobs:
 
                       sys.exit(1)
 
-                  del lines[start:end]
+                  # 保留真正的 RESOLVE_BTFIDS 行。
+                  del lines[
+                      start:end
+                  ]
 
-                  text = "".join(lines)
+                  text = "".join(
+                      lines
+                  )
+
+          # ============================================================
+          # 找真正的 resolve_btfids 执行行。
+          # ============================================================
 
           lines = text.splitlines(
               keepends=True
@@ -2230,16 +2542,21 @@ jobs:
 
           target = None
 
-          for index, line in enumerate(lines):
+          for index, line in enumerate(
+              lines
+          ):
 
               stripped = line.strip()
 
               if stripped.startswith("#"):
+
                   continue
 
               if (
-                  "RESOLVE_BTFIDS" in stripped
-                  and "vmlinux" in stripped
+                  "RESOLVE_BTFIDS"
+                  in stripped
+                  and "vmlinux"
+                  in stripped
               ):
 
                   target = index
@@ -2252,12 +2569,36 @@ jobs:
                   "not found"
               )
 
+              print("")
+              print(
+                  "=== related lines ==="
+              )
+
+              for number, line in enumerate(
+                  text.splitlines(),
+                  1
+              ):
+
+                  if (
+                      "RESOLVE_BTFIDS"
+                      in line
+                      or "resolve_btfids"
+                      in line
+                  ):
+
+                      print(
+                          f"{number}: {line}"
+                      )
+
               sys.exit(1)
 
-          original = lines[target]
+          original = lines[
+              target
+          ]
 
           indent = original[
-              :len(original) - len(original.lstrip())
+              :len(original)
+              - len(original.lstrip())
           ]
 
           block = [
@@ -2301,7 +2642,9 @@ jobs:
               + 'fi\n',
           ]
 
-          lines[target:target] = block
+          lines[
+              target:target
+          ] = block
 
           path.write_text(
               "".join(lines)
@@ -2312,9 +2655,11 @@ jobs:
           )
           PY
 
+          echo "=== Verify link-vmlinux.sh diagnostic patch ==="
+
           grep -n \
-            -B 8 \
-            -A 30 \
+            -B 10 \
+            -A 35 \
             'BTF_DIAG_SAVE_VMLINUX' \
             "$LINK_VMLINUX_SH" \
             || true
@@ -2324,283 +2669,22 @@ jobs:
             "$LINK_VMLINUX_SH"; then
 
             echo "❌ link-vmlinux diagnostic patch failed"
+
             exit 1
 
           fi
 
-          # ============================================================
-          # Raw BTF parser
-          # ============================================================
+          if grep -A 30 \
+            'BTF_DIAG_SAVE_VMLINUX' \
+            "$LINK_VMLINUX_SH" \
+            | grep -qE \
+              '^[[:space:]]*sync([[:space:]]|$)'; then
 
-          cat > "$BTF_PARSER" <<'PY'
-          import struct
-          import sys
-          from pathlib import Path
+            echo "❌ diagnostic block 中仍存在 sync"
 
-          src = Path(sys.argv[1])
-          dst = Path(sys.argv[2])
+            exit 1
 
-          targets = [
-              "xdp_buff",
-              "udp_sock",
-              "udp6_sock",
-              "tcp_timewait_sock",
-              "tcp_sock",
-              "tcp_request_sock",
-              "tcp6_sock",
-              "netlink_sock",
-          ]
-
-          kinds = {
-              0: "UNKN",
-              1: "INT",
-              2: "PTR",
-              3: "ARRAY",
-              4: "STRUCT",
-              5: "UNION",
-              6: "ENUM",
-              7: "FWD",
-              8: "TYPEDEF",
-              9: "VOLATILE",
-              10: "CONST",
-              11: "RESTRICT",
-              12: "FUNC",
-              13: "FUNC_PROTO",
-              14: "VAR",
-              15: "DATASEC",
-              16: "FLOAT",
-              17: "DECL_TAG",
-              18: "TYPE_TAG",
-              19: "ENUM64",
-          }
-
-          data = src.read_bytes()
-
-          if len(data) < 24:
-              raise SystemExit(
-                  "raw BTF too small"
-              )
-
-          if struct.unpack_from(
-              "<H",
-              data,
-              0
-          )[0] == 0xEB9F:
-
-              endian = "<"
-
-          elif struct.unpack_from(
-              ">H",
-              data,
-              0
-          )[0] == 0xEB9F:
-
-              endian = ">"
-
-          else:
-
-              raise SystemExit(
-                  "invalid BTF magic"
-              )
-
-          (
-              magic,
-              version,
-              flags,
-              hdr_len,
-              type_off,
-              type_len,
-              str_off,
-              str_len,
-          ) = struct.unpack_from(
-              endian + "HBBIIIII",
-              data,
-              0
-          )
-
-          type_start = hdr_len + type_off
-          type_end = type_start + type_len
-
-          str_start = hdr_len + str_off
-          str_end = str_start + str_len
-
-          strings = data[
-              str_start:str_end
-          ]
-
-          def get_string(offset):
-
-              if offset == 0:
-                  return ""
-
-              end = strings.find(
-                  b"\x00",
-                  offset
-              )
-
-              if end < 0:
-                  end = len(strings)
-
-              return strings[
-                  offset:end
-              ].decode(
-                  "utf-8",
-                  errors="replace"
-              )
-
-          def extra_size(kind, vlen):
-
-              if kind == 1:
-                  return 4
-
-              if kind == 2:
-                  return 0
-
-              if kind == 3:
-                  return 12
-
-              if kind in (4, 5):
-                  return 12 * vlen
-
-              if kind == 6:
-                  return 8 * vlen
-
-              if kind == 7:
-                  return 0
-
-              if kind == 8:
-                  return 0
-
-              if kind in (9, 10, 11):
-                  return 0
-
-              if kind == 12:
-                  return 0
-
-              if kind == 13:
-                  return 8 * vlen
-
-              if kind == 14:
-                  return 4
-
-              if kind == 15:
-                  return 12 * vlen
-
-              if kind == 16:
-                  return 0
-
-              if kind == 17:
-                  return 4
-
-              if kind == 18:
-                  return 0
-
-              if kind == 19:
-                  return 12 * vlen
-
-              raise RuntimeError(
-                  f"unsupported BTF kind {kind}"
-              )
-
-          found = {
-              x: []
-              for x in targets
-          }
-
-          pos = type_start
-          type_id = 1
-
-          while pos < type_end:
-
-              name_off, info, size_type = \
-                  struct.unpack_from(
-                      endian + "III",
-                      data,
-                      pos
-                  )
-
-              vlen = info & 0xffff
-              kind = (info >> 24) & 0x1f
-              kflag = (info >> 31) & 1
-
-              name = get_string(
-                  name_off
-              )
-
-              if name in found:
-
-                  found[name].append(
-                      (
-                          type_id,
-                          kind,
-                          size_type,
-                          vlen,
-                          kflag,
-                      )
-                  )
-
-              pos += (
-                  12
-                  + extra_size(
-                      kind,
-                      vlen
-                  )
-              )
-
-              type_id += 1
-
-          lines = [
-              "=== Raw BTF header ===",
-              f"file={src}",
-              f"magic=0x{magic:04x}",
-              f"version={version}",
-              f"flags={flags}",
-              f"hdr_len={hdr_len}",
-              f"type_len={type_len}",
-              f"str_len={str_len}",
-              f"type_count={type_id - 1}",
-              "",
-          ]
-
-          for name in targets:
-
-              if not found[name]:
-
-                  lines.append(
-                      f"BTF TYPE MISSING: {name}"
-                  )
-
-                  continue
-
-              for (
-                  tid,
-                  kind,
-                  size_type,
-                  vlen,
-                  kflag,
-              ) in found[name]:
-
-                  lines.append(
-                      "BTF TYPE: "
-                      f"name={name} "
-                      f"id={tid} "
-                      f"kind={kinds.get(kind, kind)} "
-                      f"kind_id={kind} "
-                      f"size_or_type={size_type} "
-                      f"vlen={vlen} "
-                      f"kflag={kflag}"
-                  )
-
-          output = "\n".join(lines) + "\n"
-
-          dst.write_text(
-              output
-          )
-
-          print(
-              output
-          )
-          PY
+          fi
 
           # ============================================================
           # Build
@@ -2609,7 +2693,12 @@ jobs:
           echo "=== 开始内核编译 ==="
 
           echo "CPUD=$CPUD"
+
           echo "BUILD_METHOD=$BUILD_METHOD"
+
+          echo "PAHOLE=$PAHOLE_BIN"
+
+          echo "LOG=$BUILD_LOG"
 
           set +e
 
@@ -2630,6 +2719,8 @@ jobs:
                   "$BUILD_METHOD"
 
               else
+
+                echo "❌ oplus_modules_variant.sh failed"
 
                 exit "$MODULE_STATUS"
 
@@ -2661,7 +2752,20 @@ jobs:
             > "$STATUS_FILE"
 
           echo "=== 官方构建脚本退出码 ==="
+
           echo "$BUILD_STATUS"
+
+          # ============================================================
+          # Confirm resolve_btfids rebuilt
+          # ============================================================
+
+          echo "=== resolve_btfids compile/rebuild lines ==="
+
+          grep -nEi \
+            'resolve_btfids|HOSTCC.*main\.o|HOSTLD.*resolve_btfids' \
+            "$BUILD_LOG" \
+            | tail -n 250 \
+            || true
 
           # ============================================================
           # BTFDBG
@@ -2672,32 +2776,34 @@ jobs:
           grep -n \
             'BTFDBG' \
             "$BUILD_LOG" \
-            | tail -n 100 \
+            | tail -n 300 \
             || true
 
           # ============================================================
-          # Runtime BTFIDS
+          # BTFIDS runtime
           # ============================================================
 
           echo "=== Runtime BTFIDS ==="
 
           grep -nE \
-            'BTFIDS +vmlinux|SAVEBTF|FAILED unresolved symbol|BTFDBG' \
+            'LD +\.tmp_vmlinux\.btf|BTF +\.btf\.vmlinux\.bin\.o|LD +vmlinux|BTFIDS +vmlinux|SAVEBTF|BTFDBG|FAILED unresolved symbol|SORTTAB|SYSMAP|OBJCOPY|Image' \
             "$BUILD_LOG" \
-            | tail -n 200 \
+            | tail -n 500 \
             || true
 
           # ============================================================
-          # Kernel out
+          # Kernel output directory
           # ============================================================
 
-          KERNEL_OUT=$(find ./kernel_platform/out \
+          KERNEL_OUT=$(find \
+            ./kernel_platform/out \
             -type d \
             -path '*/gki_kernel/common' \
             2>/dev/null \
             | head -n 1)
 
-          echo "=== Kernel out ==="
+          echo "=== Kernel out directory ==="
+
           echo "${KERNEL_OUT:-未找到}"
 
           # ============================================================
@@ -2708,7 +2814,8 @@ jobs:
 
           if [ -n "$KERNEL_OUT" ]; then
 
-            BTF_HELPER_O=$(find "$KERNEL_OUT" \
+            BTF_HELPER_O=$(find \
+              "$KERNEL_OUT" \
               -type f \
               -path '*/kernel/btf_xdp_buff_emit.o' \
               2>/dev/null \
@@ -2716,9 +2823,11 @@ jobs:
 
           fi
 
-          if [ -n "$BTF_HELPER_O" ]; then
+          echo "=== helper object ==="
 
-            echo "=== btf_xdp_buff_emit.o ==="
+          echo "${BTF_HELPER_O:-未找到}"
+
+          if [ -n "$BTF_HELPER_O" ]; then
 
             file "$BTF_HELPER_O" \
               || true
@@ -2729,6 +2838,8 @@ jobs:
               > "$BTF_HELPER_DWARF_FILE" \
               2>/dev/null \
               || true
+
+            rm -f "$BTF_HELPER_TYPES_FILE"
 
             for TYPE in \
               xdp_buff \
@@ -2741,7 +2852,8 @@ jobs:
               netlink_sock
             do
 
-              echo "===== struct $TYPE =====" \
+              echo \
+                "===== struct $TYPE =====" \
                 >> "$BTF_HELPER_TYPES_FILE"
 
               grep -n \
@@ -2749,11 +2861,62 @@ jobs:
                 -A 10 \
                 "$TYPE" \
                 "$BTF_HELPER_DWARF_FILE" \
-                | head -n 50 \
+                | head -n 60 \
                 >> "$BTF_HELPER_TYPES_FILE" \
                 || true
 
             done
+
+          fi
+
+          # ============================================================
+          # Saved vmlinux / BTF sections
+          # ============================================================
+
+          if [ -f "$SAVED_VMLINUX" ]; then
+
+            echo "=== Saved vmlinux ==="
+
+            ls -lh \
+              "$SAVED_VMLINUX" \
+              || true
+
+            file \
+              "$SAVED_VMLINUX" \
+              || true
+
+            echo "=== Saved vmlinux BTF sections ==="
+
+            readelf -S \
+              "$SAVED_VMLINUX" \
+              2>/dev/null \
+              | grep -E \
+                '\.BTF|\.BTF_ids' \
+              || true
+
+          fi
+
+          if [ -f "$SAVED_BTF_BIN" ]; then
+
+            echo "=== Saved BTF object ==="
+
+            ls -lh \
+              "$SAVED_BTF_BIN" \
+              || true
+
+            file \
+              "$SAVED_BTF_BIN" \
+              || true
+
+          fi
+
+          if [ -f "$SAVED_TMP_BTF" ]; then
+
+            echo "=== Saved tmp vmlinux BTF ==="
+
+            ls -lh \
+              "$SAVED_TMP_BTF" \
+              || true
 
           fi
 
@@ -2765,6 +2928,7 @@ jobs:
 
             {
               echo "=== __BTF_ID__ target symbols ==="
+              echo ""
 
               readelf -sW \
                 "$SAVED_VMLINUX" \
@@ -2776,6 +2940,8 @@ jobs:
               echo ""
 
               if [ -n "$LLVM_NM_BIN" ]; then
+
+                echo "=== nm target symbols ==="
 
                 "$LLVM_NM_BIN" \
                   -a \
@@ -2793,93 +2959,6 @@ jobs:
           fi
 
           # ============================================================
-          # Extract .BTF from BTF object
-          # ============================================================
-
-          if [ -f "$SAVED_BTF_BIN" ] && \
-             [ -n "$LLVM_OBJCOPY_BIN" ]; then
-
-            "$LLVM_OBJCOPY_BIN" \
-              --dump-section \
-              ".BTF=$RAW_BTF_SECTION" \
-              "$SAVED_BTF_BIN" \
-              || true
-
-          fi
-
-          # ============================================================
-          # Extract .BTF from final vmlinux
-          # ============================================================
-
-          if [ -f "$SAVED_VMLINUX" ] && \
-             [ -n "$LLVM_OBJCOPY_BIN" ]; then
-
-            "$LLVM_OBJCOPY_BIN" \
-              --dump-section \
-              ".BTF=$FINAL_RAW_BTF" \
-              "$SAVED_VMLINUX" \
-              || true
-
-          fi
-
-          # ============================================================
-          # Compare raw BTF
-          # ============================================================
-
-          {
-            echo "=== BTF comparison ==="
-
-            if [ -f "$RAW_BTF_SECTION" ] && \
-               [ -f "$FINAL_RAW_BTF" ]; then
-
-              sha256sum \
-                "$RAW_BTF_SECTION" \
-                "$FINAL_RAW_BTF" \
-                || true
-
-              if cmp -s \
-                "$RAW_BTF_SECTION" \
-                "$FINAL_RAW_BTF"; then
-
-                echo "FINAL_VMLINUX_BTF_IDENTICAL=YES"
-
-              else
-
-                echo "FINAL_VMLINUX_BTF_IDENTICAL=NO"
-
-              fi
-
-            else
-
-              echo "BTF comparison files missing"
-
-            fi
-
-          } | tee "$BTF_COMPARE_FILE"
-
-          # ============================================================
-          # Parse both BTFs
-          # ============================================================
-
-          if [ -f "$RAW_BTF_SECTION" ]; then
-
-            python3 \
-              "$BTF_PARSER" \
-              "$RAW_BTF_SECTION" \
-              "$BTF_RAW_TYPES_FILE"
-
-          fi
-
-          if [ -f "$FINAL_RAW_BTF" ]; then
-
-            python3 \
-              "$BTF_PARSER" \
-              "$FINAL_RAW_BTF" \
-              "$FINAL_BTF_RAW_TYPES_FILE"
-
-          fi
-
-          # ============================================================
           # resolve_btfids binary/source diagnostics
           # ============================================================
 
@@ -2893,12 +2972,21 @@ jobs:
 
           {
             echo "=== resolve_btfids binary ==="
+
             echo "${RESOLVE_BTFIDS_BIN:-未找到}"
+
             echo ""
 
             if [ -n "$RESOLVE_BTFIDS_BIN" ]; then
 
               file "$RESOLVE_BTFIDS_BIN" \
+                || true
+
+              echo ""
+
+              strings "$RESOLVE_BTFIDS_BIN" \
+                | grep -E \
+                  'BTFDBG resolved|BTFDBG duplicate|FAILED unresolved symbol' \
                 || true
 
               echo ""
@@ -2909,7 +2997,7 @@ jobs:
 
             grep -n \
               -B 35 \
-              -A 60 \
+              -A 80 \
               'BTF_DUPLICATE_SAFE_RESOLVE_PATCH' \
               "$RESOLVE_BTFIDS_SRC" \
               || true
@@ -2920,7 +3008,7 @@ jobs:
 
             grep -n \
               -B 20 \
-              -A 120 \
+              -A 140 \
               'static int symbols_resolve' \
               "$RESOLVE_BTFIDS_SRC" \
               || true
@@ -2928,22 +3016,29 @@ jobs:
           } | tee "$RESOLVE_BTFIDS_DEBUG_FILE"
 
           # ============================================================
-          # Find kernel artifacts
+          # Build artifacts
+          #
+          # 注意：
+          # OPPO 外层脚本可能错误返回 0，
+          # 所以 Image / Image.lz4 才是最终权威判断。
           # ============================================================
 
-          IMAGE=$(find ./kernel_platform/out \
+          IMAGE=$(find \
+            ./kernel_platform/out \
             -type f \
             -name Image \
             2>/dev/null \
             | head -n 1)
 
-          IMAGE_LZ4=$(find ./kernel_platform/out \
+          IMAGE_LZ4=$(find \
+            ./kernel_platform/out \
             -type f \
             -name Image.lz4 \
             2>/dev/null \
             | head -n 1)
 
-          VMLINUX=$(find ./kernel_platform/out \
+          VMLINUX=$(find \
+            ./kernel_platform/out \
             -type f \
             -name vmlinux \
             2>/dev/null \
@@ -2952,21 +3047,23 @@ jobs:
           echo "=== 编译产物 ==="
 
           echo "Image     = ${IMAGE:-未找到}"
+
           echo "Image.lz4 = ${IMAGE_LZ4:-未找到}"
+
           echo "vmlinux   = ${VMLINUX:-未找到}"
 
           # ============================================================
-          # Result
-          #
-          # 外层 OPPO build script 可能错误返回 0，
-          # 所以 Image / Image.lz4 才是权威结果。
+          # Final result
           # ============================================================
 
           if [ -z "$IMAGE" ] && \
              [ -z "$IMAGE_LZ4" ]; then
 
             echo ""
+
             echo "❌ 没有生成 Image / Image.lz4"
+
+            echo "请查看 Show Kernel Build Error"
 
             exit 1
 
@@ -2975,7 +3072,9 @@ jobs:
           if [ "$BUILD_STATUS" -ne 0 ]; then
 
             echo ""
+
             echo "❌ 官方构建脚本退出码:"
+
             echo "$BUILD_STATUS"
 
             exit "$BUILD_STATUS"
@@ -2983,7 +3082,24 @@ jobs:
           fi
 
           echo ""
+
           echo "✅ 内核编译成功"
+
+          echo "=== Final artifacts ==="
+
+          find \
+            ./kernel_platform/out \
+            -type f \
+            \( \
+              -name Image \
+              -o \
+              -name Image.lz4 \
+              -o \
+              -name vmlinux \
+            \) \
+            -print \
+            2>/dev/null \
+            || true
 
       - name: Show Kernel Build Error
         if: always()
@@ -2992,110 +3108,42 @@ jobs:
 
           STATUS_FILE="$GITHUB_WORKSPACE/kernel-build-status.txt"
 
-          BTF_COMPARE_FILE="$GITHUB_WORKSPACE/btf-compare.txt"
+          RESOLVE_BTFIDS_PATCH_FILE="$GITHUB_WORKSPACE/resolve-btfids-patch.txt"
 
-          BTF_RAW_TYPES_FILE="$GITHUB_WORKSPACE/btf-raw-types.txt"
-          FINAL_BTF_RAW_TYPES_FILE="$GITHUB_WORKSPACE/vmlinux-btf-raw-types.txt"
+          RESOLVE_BTFIDS_DEBUG_FILE="$GITHUB_WORKSPACE/resolve-btfids-debug.txt"
 
           BTF_ID_SYMBOLS_FILE="$GITHUB_WORKSPACE/btf-id-symbols.txt"
-
-          RESOLVE_BTFIDS_PATCH_FILE="$GITHUB_WORKSPACE/resolve-btfids-patch.txt"
-          RESOLVE_BTFIDS_DEBUG_FILE="$GITHUB_WORKSPACE/resolve-btfids-debug.txt"
 
           BTF_HELPER_TYPES_FILE="$GITHUB_WORKSPACE/btf-helper-types.txt"
 
           echo "============================================================"
+
           echo "Kernel Build Diagnostic"
+
           echo "============================================================"
+
+          # ============================================================
+          # Status
+          # ============================================================
 
           if [ -f "$STATUS_FILE" ]; then
 
             echo ""
+
             echo "=== Build script exit code ==="
 
             cat "$STATUS_FILE"
 
           fi
 
-          if [ ! -f "$LOG" ]; then
-
-            echo ""
-            echo "⚠️ kernel-build.log 不存在"
-
-            exit 0
-
-          fi
-
-          echo ""
-          echo "================ BTFDBG ================="
-
-          grep -n \
-            'BTFDBG' \
-            "$LOG" \
-            | tail -n 200 \
-            || true
-
-          echo ""
-          echo "================ BTFIDS runtime ================="
-
-          grep -nE \
-            'CC +tools/bpf/resolve_btfids|HOSTCC.*resolve_btfids|LD +\.tmp_vmlinux\.btf|BTF +\.btf\.vmlinux\.bin\.o|LD +vmlinux|BTFIDS +vmlinux|SAVEBTF|FAILED unresolved symbol|BTFDBG' \
-            "$LOG" \
-            | tail -n 600 \
-            || true
-
-          echo ""
-          echo "================ unresolved ================="
-
-          grep -n \
-            'FAILED unresolved symbol' \
-            "$LOG" \
-            | tail -n 200 \
-            || true
-
-          echo ""
-          echo "================ netlink_sock ================="
-
-          grep -nEi \
-            'netlink_sock' \
-            "$LOG" \
-            | tail -n 400 \
-            || true
-
-          echo ""
-          echo "================ tcp6_sock ================="
-
-          grep -nEi \
-            'tcp6_sock' \
-            "$LOG" \
-            | tail -n 300 \
-            || true
-
-          echo ""
-          echo "================ BTF/pahole errors ================="
-
-          grep -nEi \
-            'BTFIDS|BTF |pahole|resolve_btfids|tag__recode_dwarf_type|ftype__recode_dwarf_types|lexblock__recode_dwarf_types|malformed BTF|unresolved symbol' \
-            "$LOG" \
-            | tail -n 800 \
-            || true
-
-          echo ""
-          echo "================ compiler errors ================="
-
-          grep -nEi \
-            '(^|[^a-z])error:|fatal:|undefined reference|make(\[[0-9]+\])?: \*\*\*|FAILED|Segmentation fault|Killed|syntax error' \
-            "$LOG" \
-            | tail -n 800 \
-            || true
-
           # ============================================================
-          # Patch verification
+          # Patch diagnostics may exist even if build never started
           # ============================================================
 
           if [ -f "$RESOLVE_BTFIDS_PATCH_FILE" ]; then
 
             echo ""
+
             echo "================ resolve_btfids patch ================="
 
             cat "$RESOLVE_BTFIDS_PATCH_FILE" \
@@ -3103,16 +3151,157 @@ jobs:
 
           fi
 
+          if [ ! -f "$LOG" ]; then
+
+            echo ""
+
+            echo "⚠️ kernel-build.log 不存在"
+
+            echo "如果 Fallback 在编译前失败，请查看上面的 patch 输出。"
+
+            exit 0
+
+          fi
+
           # ============================================================
-          # Source diagnostics
+          # BTFDBG
+          # ============================================================
+
+          echo ""
+
+          echo "================ BTFDBG ================="
+
+          grep -n \
+            'BTFDBG' \
+            "$LOG" \
+            | tail -n 400 \
+            || true
+
+          # ============================================================
+          # Resolver rebuild
+          # ============================================================
+
+          echo ""
+
+          echo "================ resolve_btfids rebuild ================="
+
+          grep -nEi \
+            'HOSTCC.*resolve_btfids|HOSTCC.*main\.o|HOSTLD.*resolve_btfids|resolve_btfids' \
+            "$LOG" \
+            | tail -n 500 \
+            || true
+
+          # ============================================================
+          # BTFIDS runtime
+          # ============================================================
+
+          echo ""
+
+          echo "================ BTFIDS runtime ================="
+
+          grep -nEi \
+            'LD +\.tmp_vmlinux\.btf|BTF +\.btf\.vmlinux\.bin\.o|LD +vmlinux|BTFIDS +vmlinux|SAVEBTF|BTFDBG|FAILED unresolved symbol|SORTTAB|SYSMAP|OBJCOPY|Image' \
+            "$LOG" \
+            | tail -n 800 \
+            || true
+
+          # ============================================================
+          # SAVEBTF context
+          # ============================================================
+
+          echo ""
+
+          echo "================ SAVEBTF context ================="
+
+          grep -n \
+            -B 80 \
+            -A 120 \
+            'SAVEBTF' \
+            "$LOG" \
+            | tail -n 600 \
+            || true
+
+          # ============================================================
+          # unresolved
+          # ============================================================
+
+          echo ""
+
+          echo "================ unresolved symbols ================="
+
+          grep -n \
+            'FAILED unresolved symbol' \
+            "$LOG" \
+            | tail -n 300 \
+            || true
+
+          # ============================================================
+          # netlink_sock
+          # ============================================================
+
+          echo ""
+
+          echo "================ netlink_sock ================="
+
+          grep -nEi \
+            'netlink_sock' \
+            "$LOG" \
+            | tail -n 500 \
+            || true
+
+          # ============================================================
+          # tcp6_sock
+          # ============================================================
+
+          echo ""
+
+          echo "================ tcp6_sock ================="
+
+          grep -nEi \
+            'tcp6_sock' \
+            "$LOG" \
+            | tail -n 400 \
+            || true
+
+          # ============================================================
+          # BTF stages / pahole
+          # ============================================================
+
+          echo ""
+
+          echo "================ BTF / pahole ================="
+
+          grep -nEi \
+            'BTFIDS|BTF |pahole|resolve_btfids|tag__recode_dwarf_type|ftype__recode_dwarf_types|lexblock__recode_dwarf_types|malformed BTF|unresolved symbol' \
+            "$LOG" \
+            | tail -n 900 \
+            || true
+
+          # ============================================================
+          # Actual errors
+          # ============================================================
+
+          echo ""
+
+          echo "================ compiler / build errors ================="
+
+          grep -nEi \
+            '(^|[^a-z])error:|fatal:|undefined reference|make(\[[0-9]+\])?: \*\*\*|FAILED|Segmentation fault|Killed|syntax error|unexpected end of file|not found' \
+            "$LOG" \
+            | tail -n 900 \
+            || true
+
+          # ============================================================
+          # resolve_btfids source/binary
           # ============================================================
 
           if [ -f "$RESOLVE_BTFIDS_DEBUG_FILE" ]; then
 
             echo ""
-            echo "================ resolve_btfids source ================="
 
-            tail -n 2200 \
+            echo "================ resolve_btfids debug ================="
+
+            tail -n 2600 \
               "$RESOLVE_BTFIDS_DEBUG_FILE" \
               || true
 
@@ -3125,6 +3314,7 @@ jobs:
           if [ -f "$BTF_ID_SYMBOLS_FILE" ]; then
 
             echo ""
+
             echo "================ __BTF_ID__ symbols ================="
 
             cat "$BTF_ID_SYMBOLS_FILE" \
@@ -3133,82 +3323,30 @@ jobs:
           fi
 
           # ============================================================
-          # BTF compare
-          # ============================================================
-
-          if [ -f "$BTF_COMPARE_FILE" ]; then
-
-            echo ""
-            echo "================ raw BTF comparison ================="
-
-            cat "$BTF_COMPARE_FILE" \
-              || true
-
-          fi
-
-          # ============================================================
-          # BTF object types
-          # ============================================================
-
-          if [ -f "$BTF_RAW_TYPES_FILE" ]; then
-
-            echo ""
-            echo "================ BTF object raw types ================="
-
-            cat "$BTF_RAW_TYPES_FILE" \
-              || true
-
-            echo ""
-            echo "=== object tcp6_sock/netlink_sock ==="
-
-            grep -E \
-              'name=(tcp6_sock|netlink_sock)|MISSING: (tcp6_sock|netlink_sock)' \
-              "$BTF_RAW_TYPES_FILE" \
-              || true
-
-          fi
-
-          # ============================================================
-          # Final vmlinux BTF types
-          # ============================================================
-
-          if [ -f "$FINAL_BTF_RAW_TYPES_FILE" ]; then
-
-            echo ""
-            echo "================ final vmlinux raw types ================="
-
-            cat "$FINAL_BTF_RAW_TYPES_FILE" \
-              || true
-
-            echo ""
-            echo "=== final tcp6_sock/netlink_sock ==="
-
-            grep -E \
-              'name=(tcp6_sock|netlink_sock)|MISSING: (tcp6_sock|netlink_sock)' \
-              "$FINAL_BTF_RAW_TYPES_FILE" \
-              || true
-
-          fi
-
-          # ============================================================
-          # Helper DWARF
+          # Helper types
           # ============================================================
 
           if [ -f "$BTF_HELPER_TYPES_FILE" ]; then
 
             echo ""
+
             echo "================ helper DWARF ================="
 
-            tail -n 1200 \
+            tail -n 1400 \
               "$BTF_HELPER_TYPES_FILE" \
               || true
 
           fi
 
-          echo ""
-          echo "================ 最后 1200 行 ================="
+          # ============================================================
+          # End of full build log
+          # ============================================================
 
-          tail -n 1200 \
+          echo ""
+
+          echo "================ 最后 1400 行 ================="
+
+          tail -n 1400 \
             "$LOG" \
             || true
 
@@ -3224,20 +3362,14 @@ jobs:
             resolve-btfids-patch.txt
             resolve-btfids-debug.txt
 
-            btf-helper-types.txt
-
             btf-id-symbols.txt
 
-            btf-compare.txt
-            btf-raw-types.txt
-            vmlinux-btf-raw-types.txt
+            btf-helper-types.txt
+            btf-helper-dwarf.txt
 
             vmlinux-before-btfids
             btf-bin-before-btfids.o
             tmp-vmlinux-btf-before-btfids
-
-            raw-btf-before-btfids.bin
-            raw-vmlinux-btf-before-btfids.bin
           if-no-files-found: ignore
 
       - name: Make AnyKernel3

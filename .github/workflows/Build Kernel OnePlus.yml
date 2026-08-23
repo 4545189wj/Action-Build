@@ -1686,19 +1686,7 @@ jobs:
             || true
 
           # ============================================================
-          # 统一 BTF helper
-          #
-          # 8 个类型全部集中到同一个 no-LTO TU：
-          #
-          #   xdp_buff
-          #   udp_sock
-          #   udp6_sock
-          #   tcp_timewait_sock
-          #   tcp_sock
-          #   tcp_request_sock
-          #   tcp6_sock
-          #   netlink_sock
-          #
+          # Unified BTF helper
           # ============================================================
 
           echo "=== Create unified BTF helper ==="
@@ -1707,9 +1695,6 @@ jobs:
           // SPDX-License-Identifier: GPL-2.0
           /*
            * Unified DWARF/BTF type retention helper.
-           *
-           * All required networking types are emitted from this single
-           * translation unit.
            *
            * This object is compiled with:
            *
@@ -1734,11 +1719,6 @@ jobs:
           #include <${TCP_REQ_HEADER_REL}>
           #include <${TCP6_HEADER_REL}>
 
-          /*
-           * netlink_sock is private to net/netlink.
-           *
-           * btf_xdp_buff_emit.c lives in common/kernel/.
-           */
           #include "../net/netlink/af_netlink.h"
 
           static __used noinline void
@@ -1807,7 +1787,7 @@ jobs:
             || true
 
           # ============================================================
-          # helper 配置验证
+          # Verify helper
           # ============================================================
 
           if ! grep -qF \
@@ -1936,23 +1916,39 @@ jobs:
             || true
 
           # ============================================================
+          # Find llvm-objcopy
+          # ============================================================
+
+          echo "=== Detect llvm-objcopy ==="
+
+          LLVM_OBJCOPY_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
+            -type f \
+            -path "*/clang/host/linux-x86/*/bin/llvm-objcopy" \
+            -perm -111 \
+            2>/dev/null \
+            | head -n 1)
+
+          if [ -n "$LLVM_OBJCOPY_BIN" ]; then
+
+            echo "✅ llvm-objcopy:"
+            echo "$LLVM_OBJCOPY_BIN"
+
+          else
+
+            echo "⚠️ 找不到 Android llvm-objcopy"
+
+          fi
+
+          # ============================================================
           # Patch link-vmlinux.sh
           #
-          # 关键：
-          #
-          # 在 ${RESOLVE_BTFIDS} vmlinux 之前保存：
+          # 在真正 ${RESOLVE_BTFIDS} vmlinux 之前保存：
           #
           #   vmlinux
           #   .btf.vmlinux.bin.o
           #   .tmp_vmlinux.btf
           #
-          # 注意：
-          #
-          #   这里故意没有 sync。
-          #
-          # 上一轮 sync 不在 Android build-tools PATH，
-          # 导致 Error 127，真正 resolve_btfids 没有执行。
-          #
+          # 不使用 sync。
           # ============================================================
 
           echo "=== Patch link-vmlinux.sh for BTF diagnostics ==="
@@ -1966,11 +1962,7 @@ jobs:
 
           marker = "BTF_DIAG_SAVE_VMLINUX"
 
-          # ============================================================
-          # 如果脚本中残留旧 diagnostic patch，
-          # 先完整删除，避免旧版 sync 继续存在。
-          # ============================================================
-
+          # Remove old diagnostic block if it exists.
           if marker in text:
 
               lines = text.splitlines(keepends=True)
@@ -1986,19 +1978,20 @@ jobs:
               if start is not None:
 
                   for i in range(start, len(lines)):
-                      if "RESOLVE_BTFIDS" in lines[i] and "vmlinux" in lines[i]:
+                      if (
+                          "RESOLVE_BTFIDS" in lines[i]
+                          and "vmlinux" in lines[i]
+                      ):
                           end = i
                           break
 
                   if end is None:
                       print(
-                          "ERROR: old diagnostic block found "
+                          "ERROR: old BTF diagnostic block found "
                           "but RESOLVE_BTFIDS line missing"
                       )
                       sys.exit(1)
 
-                  # 删除旧 diagnostic block，
-                  # 保留真正的 RESOLVE_BTFIDS 行。
                   del lines[start:end]
 
                   text = "".join(lines)
@@ -2131,21 +2124,17 @@ jobs:
             exit 1
           fi
 
-          # ============================================================
-          # 非常重要：
-          # 新 diagnostic block 中绝不能再有 sync。
-          # ============================================================
-
           if grep -A 30 \
             'BTF_DIAG_SAVE_VMLINUX' \
             "$LINK_VMLINUX_SH" \
-            | grep -qE '^[[:space:]]*sync([[:space:]]|$)'; then
+            | grep -qE \
+              '^[[:space:]]*sync([[:space:]]|$)'; then
 
             echo "❌ diagnostic block 中仍存在 sync"
             exit 1
           fi
 
-          echo "✅ BTFIDS 前 vmlinux 保存逻辑已安装"
+          echo "✅ BTFIDS 前保存逻辑已安装"
           echo "✅ diagnostic block 中没有 sync"
 
           # ============================================================
@@ -2159,7 +2148,10 @@ jobs:
           SAVED_BTF_BIN="$GITHUB_WORKSPACE/btf-bin-before-btfids.o"
           SAVED_TMP_BTF="$GITHUB_WORKSPACE/tmp-vmlinux-btf-before-btfids"
 
+          RAW_BTF_SECTION="$GITHUB_WORKSPACE/raw-btf-before-btfids.bin"
+
           BTF_DIAG_FILE="$GITHUB_WORKSPACE/btf-before-btfids.txt"
+          BTF_RAW_TYPES_FILE="$GITHUB_WORKSPACE/btf-raw-types.txt"
 
           rm -f "$BUILD_LOG"
           rm -f "$STATUS_FILE"
@@ -2168,7 +2160,10 @@ jobs:
           rm -f "$SAVED_BTF_BIN"
           rm -f "$SAVED_TMP_BTF"
 
+          rm -f "$RAW_BTF_SECTION"
+
           rm -f "$BTF_DIAG_FILE"
+          rm -f "$BTF_RAW_TYPES_FILE"
 
           rm -f "$GITHUB_WORKSPACE/btf-helper-dwarf.txt"
           rm -f "$GITHUB_WORKSPACE/btf-helper-types.txt"
@@ -2202,7 +2197,6 @@ jobs:
               else
 
                 echo "❌ oplus_modules_variant.sh 失败"
-
                 exit "$MODULE_STATUS"
 
               fi
@@ -2235,7 +2229,7 @@ jobs:
           echo "$BUILD_STATUS"
 
           # ============================================================
-          # Kernel output directory
+          # Kernel output
           # ============================================================
 
           KERNEL_OUT=$(find ./kernel_platform/out \
@@ -2249,7 +2243,7 @@ jobs:
           echo "${KERNEL_OUT:-未找到}"
 
           # ============================================================
-          # helper object
+          # Unified helper object
           # ============================================================
 
           BTF_HELPER_O=""
@@ -2267,10 +2261,6 @@ jobs:
           echo "=== btf_xdp_buff_emit.o ==="
 
           echo "${BTF_HELPER_O:-未找到}"
-
-          # ============================================================
-          # helper DWARF
-          # ============================================================
 
           if [ -n "$BTF_HELPER_O" ]; then
 
@@ -2359,10 +2349,8 @@ jobs:
           fi
 
           # ============================================================
-          # BTFIDS 前保存的文件
+          # BTF diagnostic report header
           # ============================================================
-
-          echo "=== BTFIDS pre-image diagnostics ==="
 
           {
             echo "========================================"
@@ -2382,11 +2370,17 @@ jobs:
             echo "$SAVED_TMP_BTF"
             echo ""
 
+            echo "Raw extracted BTF:"
+            echo "$RAW_BTF_SECTION"
+            echo ""
+
           } > "$BTF_DIAG_FILE"
 
           # ============================================================
-          # 保存的最终 vmlinux
+          # BTFIDS 前的最终 vmlinux
           # ============================================================
+
+          echo "=== BTFIDS pre-image diagnostics ==="
 
           if [ -f "$SAVED_VMLINUX" ]; then
 
@@ -2417,123 +2411,6 @@ jobs:
 
             } | tee -a "$BTF_DIAG_FILE"
 
-            # ========================================================
-            # 尝试寻找 bpftool
-            # ========================================================
-
-            echo "=== Discover bpftool ==="
-
-            BPFTOOL_BIN=$(find \
-              "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
-              -type f \
-              -name bpftool \
-              -perm -111 \
-              2>/dev/null \
-              | head -n 1)
-
-            echo "${BPFTOOL_BIN:-未找到}"
-
-            # ========================================================
-            # bpftool BTF dump
-            # ========================================================
-
-            if [ -n "$BPFTOOL_BIN" ]; then
-
-              echo "=== bpftool BTF dump: target types ==="
-
-              {
-                echo "=== bpftool BTF dump: target types ==="
-
-                "$BPFTOOL_BIN" \
-                  btf dump \
-                  file "$SAVED_VMLINUX" \
-                  format raw \
-                  2>/dev/null \
-                  | grep -nE \
-                    -A 8 \
-                    -B 3 \
-                    "xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock" \
-                  | head -n 800 \
-                  || true
-
-                echo ""
-
-              } | tee -a "$BTF_DIAG_FILE"
-
-              echo "=== Exact netlink_sock BTF match ==="
-
-              {
-                echo "=== Exact netlink_sock BTF match ==="
-
-                "$BPFTOOL_BIN" \
-                  btf dump \
-                  file "$SAVED_VMLINUX" \
-                  format raw \
-                  2>/dev/null \
-                  | grep -n \
-                    -A 12 \
-                    -B 4 \
-                    "netlink_sock" \
-                  | head -n 200 \
-                  || true
-
-                echo ""
-
-              } | tee -a "$BTF_DIAG_FILE"
-
-            else
-
-              echo "⚠️ 找不到 bpftool"
-
-              echo \
-                "bpftool not found" \
-                >> "$BTF_DIAG_FILE"
-
-            fi
-
-            # ========================================================
-            # pahole 从 BTF 读取
-            # ========================================================
-
-            echo "=== pahole BTF target types ==="
-
-            {
-              echo "=== pahole BTF target types ==="
-
-              "$PAHOLE_BIN" \
-                -F btf \
-                "$SAVED_VMLINUX" \
-                2>/dev/null \
-                | grep -nE \
-                  -A 25 \
-                  -B 3 \
-                  'struct (xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock)' \
-                | head -n 800 \
-                || true
-
-              echo ""
-
-            } | tee -a "$BTF_DIAG_FILE"
-
-            # ========================================================
-            # strings 仅辅助
-            # ========================================================
-
-            echo "=== Raw target type strings ==="
-
-            {
-              echo "=== Raw target type strings ==="
-
-              strings "$SAVED_VMLINUX" \
-                | grep -xE \
-                  'xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock' \
-                | sort -u \
-                || true
-
-              echo ""
-
-            } | tee -a "$BTF_DIAG_FILE"
-
           else
 
             echo "❌ 没有保存到 vmlinux-before-btfids"
@@ -2546,6 +2423,9 @@ jobs:
 
           # ============================================================
           # .btf.vmlinux.bin.o
+          #
+          # 这是最关键的目标。
+          # 它已经 stripped，没有 DWARF 干扰。
           # ============================================================
 
           if [ -f "$SAVED_BTF_BIN" ]; then
@@ -2561,49 +2441,495 @@ jobs:
               file "$SAVED_BTF_BIN" \
                 || true
 
+              echo ""
+
+              echo "=== Saved BTF object sections ==="
+
               readelf -S \
                 "$SAVED_BTF_BIN" \
                 2>/dev/null \
-                | grep -E '\.BTF' \
+                | grep -E \
+                  '\.BTF' \
+                || true
+
+              echo ""
+
+              echo "=== Strings in stripped BTF object ==="
+
+              strings "$SAVED_BTF_BIN" \
+                | grep -xE \
+                  'xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock' \
+                | sort -u \
                 || true
 
               echo ""
 
             } | tee -a "$BTF_DIAG_FILE"
 
-            if [ -n "${BPFTOOL_BIN:-}" ]; then
+            # ========================================================
+            # Extract raw .BTF section
+            # ========================================================
 
-              echo "=== bpftool saved BTF object ==="
+            if [ -n "$LLVM_OBJCOPY_BIN" ]; then
 
-              {
-                echo "=== bpftool saved BTF object ==="
+              echo "=== Extract raw .BTF section ==="
 
-                "$BPFTOOL_BIN" \
-                  btf dump \
-                  file "$SAVED_BTF_BIN" \
-                  format raw \
-                  2>/dev/null \
-                  | grep -nE \
-                    -A 8 \
-                    -B 3 \
-                    "xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock" \
-                  | head -n 800 \
+              rm -f "$RAW_BTF_SECTION"
+
+              "$LLVM_OBJCOPY_BIN" \
+                --dump-section \
+                ".BTF=$RAW_BTF_SECTION" \
+                "$SAVED_BTF_BIN" \
+                2>&1 \
+                || true
+
+              if [ -f "$RAW_BTF_SECTION" ]; then
+
+                echo "✅ Raw .BTF extracted:"
+                ls -lh "$RAW_BTF_SECTION" \
                   || true
 
-                echo ""
+                {
+                  echo "=== Raw .BTF strings ==="
 
-              } | tee -a "$BTF_DIAG_FILE"
+                  strings "$RAW_BTF_SECTION" \
+                    | grep -xE \
+                      'xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock' \
+                    | sort -u \
+                    || true
+
+                  echo ""
+
+                } | tee -a "$BTF_DIAG_FILE"
+
+              else
+
+                echo "❌ llvm-objcopy 没有生成 raw .BTF"
+
+              fi
+
+            else
+
+              echo "⚠️ 无 llvm-objcopy，无法提取 raw .BTF"
 
             fi
 
+            # ========================================================
+            # Direct BTF parser
+            #
+            # 不依赖 bpftool。
+            #
+            # 直接解析：
+            #
+            #   struct btf_header
+            #   struct btf_type
+            #
+            # 并打印目标类型的：
+            #
+            #   BTF ID
+            #   KIND
+            #   SIZE
+            #   VLEN
+            #
+            # ========================================================
+
+            if [ -f "$RAW_BTF_SECTION" ]; then
+
+              echo "=== Parse raw BTF type records ==="
+
+              python3 - \
+                "$RAW_BTF_SECTION" \
+                "$BTF_RAW_TYPES_FILE" \
+                <<'PY'
+          import struct
+          import sys
+          from pathlib import Path
+
+          raw_path = Path(sys.argv[1])
+          out_path = Path(sys.argv[2])
+
+          targets = {
+              "xdp_buff",
+              "udp_sock",
+              "udp6_sock",
+              "tcp_timewait_sock",
+              "tcp_sock",
+              "tcp_request_sock",
+              "tcp6_sock",
+              "netlink_sock",
+          }
+
+          kind_names = {
+              0: "UNKN",
+              1: "INT",
+              2: "PTR",
+              3: "ARRAY",
+              4: "STRUCT",
+              5: "UNION",
+              6: "ENUM",
+              7: "FWD",
+              8: "TYPEDEF",
+              9: "VOLATILE",
+              10: "CONST",
+              11: "RESTRICT",
+              12: "FUNC",
+              13: "FUNC_PROTO",
+              14: "VAR",
+              15: "DATASEC",
+              16: "FLOAT",
+              17: "DECL_TAG",
+              18: "TYPE_TAG",
+              19: "ENUM64",
+          }
+
+          data = raw_path.read_bytes()
+
+          if len(data) < 24:
+              raise SystemExit(
+                  "ERROR: raw BTF too small"
+              )
+
+          # Detect endianness using BTF magic 0xeb9f.
+          magic_le = struct.unpack_from("<H", data, 0)[0]
+          magic_be = struct.unpack_from(">H", data, 0)[0]
+
+          if magic_le == 0xEB9F:
+              endian = "<"
+          elif magic_be == 0xEB9F:
+              endian = ">"
+          else:
+              raise SystemExit(
+                  "ERROR: invalid BTF magic: "
+                  f"le=0x{magic_le:04x} "
+                  f"be=0x{magic_be:04x}"
+              )
+
+          (
+              magic,
+              version,
+              flags,
+              hdr_len,
+              type_off,
+              type_len,
+              str_off,
+              str_len,
+          ) = struct.unpack_from(
+              endian + "HBBIIIII",
+              data,
+              0,
+          )
+
+          type_start = hdr_len + type_off
+          type_end = type_start + type_len
+
+          str_start = hdr_len + str_off
+          str_end = str_start + str_len
+
+          if type_end > len(data):
+              raise SystemExit(
+                  "ERROR: BTF type section out of bounds"
+              )
+
+          if str_end > len(data):
+              raise SystemExit(
+                  "ERROR: BTF string section out of bounds"
+              )
+
+          strings_blob = data[str_start:str_end]
+
+          def get_string(offset):
+              if offset == 0:
+                  return ""
+
+              if offset >= len(strings_blob):
+                  return f"<bad-string-offset:{offset}>"
+
+              end = strings_blob.find(
+                  b"\x00",
+                  offset,
+              )
+
+              if end < 0:
+                  end = len(strings_blob)
+
+              return strings_blob[
+                  offset:end
+              ].decode(
+                  "utf-8",
+                  errors="replace",
+              )
+
+          def extra_size(kind, vlen):
+              if kind == 1:
+                  return 4
+              if kind == 2:
+                  return 0
+              if kind == 3:
+                  return 12
+              if kind in (4, 5):
+                  return 12 * vlen
+              if kind == 6:
+                  return 8 * vlen
+              if kind == 7:
+                  return 0
+              if kind == 8:
+                  return 0
+              if kind in (9, 10, 11):
+                  return 0
+              if kind == 12:
+                  return 0
+              if kind == 13:
+                  return 8 * vlen
+              if kind == 14:
+                  return 4
+              if kind == 15:
+                  return 12 * vlen
+              if kind == 16:
+                  return 0
+              if kind == 17:
+                  return 8
+              if kind == 18:
+                  return 0
+              if kind == 19:
+                  return 12 * vlen
+
+              raise ValueError(
+                  f"unsupported BTF kind {kind}"
+              )
+
+          found = {
+              name: []
+              for name in targets
+          }
+
+          pos = type_start
+          type_id = 1
+
+          while pos < type_end:
+
+              if pos + 12 > type_end:
+                  raise SystemExit(
+                      "ERROR: truncated btf_type "
+                      f"at offset {pos}"
+                  )
+
+              name_off, info, size_type = \
+                  struct.unpack_from(
+                      endian + "III",
+                      data,
+                      pos,
+                  )
+
+              vlen = info & 0xFFFF
+              kind = (info >> 24) & 0x1F
+              kflag = (info >> 31) & 1
+
+              name = get_string(name_off)
+
+              if name in found:
+                  found[name].append(
+                      {
+                          "id": type_id,
+                          "kind": kind,
+                          "kind_name": kind_names.get(
+                              kind,
+                              f"KIND_{kind}",
+                          ),
+                          "size_type": size_type,
+                          "vlen": vlen,
+                          "kflag": kflag,
+                      }
+                  )
+
+              try:
+                  extra = extra_size(
+                      kind,
+                      vlen,
+                  )
+              except ValueError as exc:
+                  raise SystemExit(
+                      f"ERROR: {exc} "
+                      f"at BTF id {type_id}"
+                  )
+
+              pos += 12 + extra
+              type_id += 1
+
+          lines = []
+
+          lines.append(
+              "=== Raw BTF header ==="
+          )
+
+          lines.append(
+              f"magic=0x{magic:04x}"
+          )
+
+          lines.append(
+              f"version={version}"
+          )
+
+          lines.append(
+              f"flags={flags}"
+          )
+
+          lines.append(
+              f"hdr_len={hdr_len}"
+          )
+
+          lines.append(
+              f"type_len={type_len}"
+          )
+
+          lines.append(
+              f"str_len={str_len}"
+          )
+
+          lines.append(
+              f"type_count={type_id - 1}"
+          )
+
+          lines.append("")
+
+          for target in [
+              "xdp_buff",
+              "udp_sock",
+              "udp6_sock",
+              "tcp_timewait_sock",
+              "tcp_sock",
+              "tcp_request_sock",
+              "tcp6_sock",
+              "netlink_sock",
+          ]:
+
+              matches = found[target]
+
+              if not matches:
+
+                  lines.append(
+                      "BTF TYPE MISSING: "
+                      f"{target}"
+                  )
+
+                  continue
+
+              for match in matches:
+
+                  lines.append(
+                      "BTF TYPE: "
+                      f"name={target} "
+                      f"id={match['id']} "
+                      f"kind={match['kind_name']} "
+                      f"kind_id={match['kind']} "
+                      f"size_or_type={match['size_type']} "
+                      f"vlen={match['vlen']} "
+                      f"kflag={match['kflag']}"
+                  )
+
+          output = "\n".join(lines) + "\n"
+
+          out_path.write_text(output)
+
+          print(output)
+          PY
+
+              echo "=== Raw BTF parser result ==="
+
+              cat "$BTF_RAW_TYPES_FILE" \
+                || true
+
+              echo ""
+
+              cat "$BTF_RAW_TYPES_FILE" \
+                >> "$BTF_DIAG_FILE" \
+                || true
+
+              # ======================================================
+              # Explicit comparison
+              # ======================================================
+
+              echo "=== Critical BTF comparison ==="
+
+              NETLINK_BTF_RESULT=$(grep \
+                '^BTF TYPE: name=netlink_sock ' \
+                "$BTF_RAW_TYPES_FILE" \
+                || true)
+
+              TCP6_BTF_RESULT=$(grep \
+                '^BTF TYPE: name=tcp6_sock ' \
+                "$BTF_RAW_TYPES_FILE" \
+                || true)
+
+              echo "tcp6_sock:"
+              echo "${TCP6_BTF_RESULT:-MISSING}"
+
+              echo ""
+              echo "netlink_sock:"
+              echo "${NETLINK_BTF_RESULT:-MISSING}"
+
+              {
+                echo ""
+                echo "=== Critical BTF comparison ==="
+                echo "tcp6_sock:"
+                echo "${TCP6_BTF_RESULT:-MISSING}"
+                echo ""
+                echo "netlink_sock:"
+                echo "${NETLINK_BTF_RESULT:-MISSING}"
+                echo ""
+              } >> "$BTF_DIAG_FILE"
+
+            fi
+
+            # ========================================================
+            # pahole exact lookup
+            # ========================================================
+
+            echo "=== pahole exact netlink_sock ==="
+
+            {
+              echo "=== pahole exact netlink_sock ==="
+
+              "$PAHOLE_BIN" \
+                -F btf \
+                -C netlink_sock \
+                "$SAVED_BTF_BIN" \
+                2>&1 \
+                | head -n 200 \
+                || true
+
+              echo ""
+
+            } | tee -a "$BTF_DIAG_FILE"
+
+            echo "=== pahole exact tcp6_sock ==="
+
+            {
+              echo "=== pahole exact tcp6_sock ==="
+
+              "$PAHOLE_BIN" \
+                -F btf \
+                -C tcp6_sock \
+                "$SAVED_BTF_BIN" \
+                2>&1 \
+                | head -n 200 \
+                || true
+
+              echo ""
+
+            } | tee -a "$BTF_DIAG_FILE"
+
           else
 
-            echo "⚠️ 没保存到 btf-bin-before-btfids.o"
+            echo "❌ 没保存到 btf-bin-before-btfids.o"
+
+            echo \
+              "ERROR: btf-bin-before-btfids.o missing" \
+              >> "$BTF_DIAG_FILE"
 
           fi
 
           # ============================================================
-          # .tmp_vmlinux.btf
+          # .tmp_vmlinux.btf DWARF
           # ============================================================
 
           if [ -f "$SAVED_TMP_BTF" ]; then
@@ -2621,7 +2947,7 @@ jobs:
 
               echo ""
 
-              echo "=== Saved .tmp_vmlinux.btf DWARF netlink_sock ==="
+              echo "=== .tmp_vmlinux.btf DWARF netlink_sock ==="
 
               readelf \
                 --debug-dump=info \
@@ -2645,7 +2971,7 @@ jobs:
           fi
 
           # ============================================================
-          # 确认 SAVEBTF 后真正发生了什么
+          # Runtime result
           # ============================================================
 
           echo "=== Verify SAVEBTF execution ==="
@@ -2669,7 +2995,7 @@ jobs:
             || true
 
           # ============================================================
-          # 编译产物
+          # Build artifacts
           # ============================================================
 
           IMAGE=$(find ./kernel_platform/out \
@@ -2697,34 +3023,28 @@ jobs:
           echo "vmlinux   = ${VMLINUX:-未找到}"
 
           # ============================================================
-          # 最终判断
+          # Final result
           # ============================================================
 
           if [ -z "$IMAGE" ] && [ -z "$IMAGE_LZ4" ]; then
 
             echo ""
-
             echo "❌ 内核没有生成 Image / Image.lz4"
-
             echo "请查看后面的 Show Kernel Build Error"
 
             exit 1
-
           fi
 
           if [ "$BUILD_STATUS" -ne 0 ]; then
 
             echo ""
-
             echo "❌ 官方构建脚本返回错误:"
             echo "$BUILD_STATUS"
 
             exit "$BUILD_STATUS"
-
           fi
 
           echo ""
-
           echo "✅ 内核编译成功"
 
           echo "=== 最终内核文件 ==="
@@ -2745,7 +3065,9 @@ jobs:
         run: |
           LOG="$GITHUB_WORKSPACE/kernel-build.log"
           STATUS_FILE="$GITHUB_WORKSPACE/kernel-build-status.txt"
+
           BTF_DIAG_FILE="$GITHUB_WORKSPACE/btf-before-btfids.txt"
+          BTF_RAW_TYPES_FILE="$GITHUB_WORKSPACE/btf-raw-types.txt"
 
           if [ -f "$STATUS_FILE" ]; then
 
@@ -2754,7 +3076,6 @@ jobs:
             cat "$STATUS_FILE"
 
             echo ""
-
           fi
 
           if [ ! -f "$LOG" ]; then
@@ -2762,25 +3083,14 @@ jobs:
             echo "⚠️ kernel-build.log 不存在"
 
             exit 0
-
           fi
 
           echo "================ 关键错误 ================="
 
           grep -nEi \
-            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|SAVEBTF|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock|btf_xdp_buff_emit|standalone-debug|thinlto|flto|CC_FLAGS_LTO|CFLAGS_REMOVE|seq_file|bpf_prog|Segmentation fault|Killed|sync: not found' \
+            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|SAVEBTF|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock|btf_xdp_buff_emit|standalone-debug|thinlto|flto|CC_FLAGS_LTO|CFLAGS_REMOVE|Segmentation fault|Killed|sync: not found' \
             "$LOG" \
-            | tail -n 600 \
-            || true
-
-          echo ""
-
-          echo "================ Unified BTF helper 编译 ================="
-
-          grep -nEi \
-            'CC +kernel/btf_xdp_buff_emit.o|btf_xdp_buff_emit|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock' \
-            "$LOG" \
-            | tail -n 400 \
+            | tail -n 650 \
             || true
 
           echo ""
@@ -2790,36 +3100,24 @@ jobs:
           grep -nEi \
             'CC +kernel/btf_xdp_buff_emit.o|LD +\.tmp_vmlinux\.btf|BTF +\.btf\.vmlinux\.bin\.o|LD +vmlinux|SAVEBTF|BTFIDS +vmlinux|FAILED unresolved symbol' \
             "$LOG" \
-            | tail -n 350 \
+            | tail -n 400 \
             || true
 
           echo ""
 
-          echo "================ SAVEBTF 附近 ================="
-
-          grep -n \
-            -B 30 \
-            -A 50 \
-            'SAVEBTF' \
-            "$LOG" \
-            | tail -n 260 \
-            || true
-
-          echo ""
-
-          echo "================ BTFIDS 附近 ================="
+          echo "================ SAVEBTF / BTFIDS 附近 ================="
 
           grep -n \
             -B 60 \
-            -A 90 \
-            'BTFIDS  vmlinux' \
+            -A 100 \
+            'SAVEBTF' \
             "$LOG" \
-            | tail -n 420 \
+            | tail -n 500 \
             || true
 
           echo ""
 
-          echo "================ 所有 unresolved symbol ================="
+          echo "================ Runtime unresolved symbols ================="
 
           grep -n \
             'FAILED unresolved symbol' \
@@ -2844,7 +3142,7 @@ jobs:
           grep -nEi \
             'xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|netlink_sock' \
             "$LOG" \
-            | tail -n 450 \
+            | tail -n 500 \
             || true
 
           echo ""
@@ -2854,7 +3152,7 @@ jobs:
           grep -nEi \
             'standalone-debug|CC_FLAGS_LTO|CFLAGS_REMOVE|thinlto|flto' \
             "$LOG" \
-            | tail -n 320 \
+            | tail -n 350 \
             || true
 
           echo ""
@@ -2864,25 +3162,42 @@ jobs:
           grep -nEi \
             'tag__recode_dwarf_type|ftype__recode_dwarf_types|lexblock__recode_dwarf_types|couldn.t find.*type' \
             "$LOG" \
-            | tail -n 280 \
+            | tail -n 300 \
             || true
+
+          if [ -f "$BTF_RAW_TYPES_FILE" ]; then
+
+            echo ""
+            echo "================ 原始 BTF 类型解析 ================="
+
+            cat "$BTF_RAW_TYPES_FILE" \
+              || true
+
+            echo ""
+
+            echo "================ netlink_sock / tcp6_sock 对照 ================="
+
+            grep -E \
+              'name=(netlink_sock|tcp6_sock)|MISSING: (netlink_sock|tcp6_sock)' \
+              "$BTF_RAW_TYPES_FILE" \
+              || true
+          fi
 
           if [ -f "$BTF_DIAG_FILE" ]; then
 
             echo ""
-            echo "================ BTFIDS 前 vmlinux BTF 诊断 ================="
+            echo "================ BTFIDS 前完整诊断 ================="
 
-            tail -n 1500 \
+            tail -n 2000 \
               "$BTF_DIAG_FILE" \
               || true
-
           fi
 
           echo ""
 
-          echo "================ 最后 800 行 ================"
+          echo "================ 最后 900 行 ================"
 
-          tail -n 800 \
+          tail -n 900 \
             "$LOG" \
             || true
 
@@ -2894,11 +3209,17 @@ jobs:
           path: |
             kernel-build.log
             kernel-build-status.txt
+
             btf-helper-types.txt
+
             btf-before-btfids.txt
+            btf-raw-types.txt
+
             vmlinux-before-btfids
             btf-bin-before-btfids.o
             tmp-vmlinux-btf-before-btfids
+
+            raw-btf-before-btfids.bin
           if-no-files-found: ignore
 
       - name: Make AnyKernel3

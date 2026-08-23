@@ -1421,15 +1421,12 @@ jobs:
           /usr/local/bin/pahole --version
 
       - name: Fallback to Build Kernel
-        if: ${{ github.event.inputs.FAST_BUILD == 'false' || steps.fast_build.outputs.fallback == 'true' }}
+        if: github.event.inputs.FAST_BUILD == 'false' || steps.fast_build.outputs.fallback == 'true'
         run: |
           cd kernel_workspace
 
-          mkdir -p "out/target/product/${{ env.CPUD }}"
+          mkdir -p "out/target/product/$CPUD"
 
-          # ============================================================
-          # BTF / pahole
-          # ============================================================
           echo "=== Detect BTF tool ==="
 
           PAHOLE_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
@@ -1439,74 +1436,24 @@ jobs:
             | head -n 1)
 
           if [ -n "$PAHOLE_BIN" ]; then
-
             echo "✅ 使用 Android prebuilt pahole:"
             echo "$PAHOLE_BIN"
-
           else
-
             echo "⚠️ 没找到 Android prebuilt pahole"
             echo "⚠️ fallback 到 /usr/local/bin/pahole"
-
             PAHOLE_BIN="/usr/local/bin/pahole"
-
           fi
 
           if [ ! -x "$PAHOLE_BIN" ]; then
-
             echo "❌ pahole 不存在或不可执行:"
             echo "$PAHOLE_BIN"
-
             exit 1
-
           fi
 
           echo "=== pahole version ==="
-
           "$PAHOLE_BIN" --version
 
           export PAHOLE="$PAHOLE_BIN"
-
-          # ============================================================
-          # BTF 类型修复
-          #
-          # 前 7 个类型继续使用独立 helper：
-          #
-          #   xdp_buff
-          #   udp_sock
-          #   udp6_sock
-          #   tcp_timewait_sock
-          #   tcp_sock
-          #   tcp_request_sock
-          #   tcp6_sock
-          #
-          # netlink_sock 单独处理：
-          #
-          #   net/netlink/af_netlink.c
-          #
-          # 在真实定义/使用该结构体的 translation unit 中
-          # 创建真实 struct 对象。
-          #
-          # 并在 netlink_proto_init() 所有局部变量声明之后
-          # 使用 inline asm 创建不可优化的真实地址引用。
-          #
-          # 注意：
-          #
-          # Linux kernel 此处按 C90 规则编译。
-          #
-          # 所以必须：
-          #
-          #   int i;
-          #   int err = ...;
-          #
-          #   asm volatile(...);
-          #
-          # 不能反过来，否则：
-          #
-          #   -Wdeclaration-after-statement
-          #
-          # 会被 -Werror 转换成致命错误。
-          # ============================================================
 
           echo "=== Configure BTF type fixes ==="
 
@@ -1523,10 +1470,6 @@ jobs:
           AF_NETLINK_H="$COMMON_DIR/net/netlink/af_netlink.h"
           NETLINK_MAKEFILE="$COMMON_DIR/net/netlink/Makefile"
 
-          # ============================================================
-          # 基础文件检查
-          # ============================================================
-
           for REQUIRED_FILE in \
             "$XDP_HEADER" \
             "$UDP_HEADER" \
@@ -1536,21 +1479,12 @@ jobs:
             "$AF_NETLINK_H" \
             "$NETLINK_MAKEFILE"
           do
-
             if [ ! -f "$REQUIRED_FILE" ]; then
-
               echo "❌ 找不到必要文件:"
               echo "$REQUIRED_FILE"
-
               exit 1
-
             fi
-
           done
-
-          # ============================================================
-          # xdp_buff
-          # ============================================================
 
           echo "=== Check struct xdp_buff ==="
 
@@ -1566,20 +1500,9 @@ jobs:
               || true
 
             exit 1
-
           fi
 
           echo "✅ 找到 struct xdp_buff"
-
-          grep -n \
-            "struct xdp_buff" \
-            "$XDP_HEADER" \
-            | head -n 10 \
-            || true
-
-          # ============================================================
-          # udp_sock
-          # ============================================================
 
           echo "=== Check struct udp_sock ==="
 
@@ -1597,20 +1520,9 @@ jobs:
               || true
 
             exit 1
-
           fi
 
           echo "✅ 找到 struct udp_sock"
-
-          grep -n \
-            "struct udp_sock" \
-            "$UDP_HEADER" \
-            | head -n 10 \
-            || true
-
-          # ============================================================
-          # udp6_sock
-          # ============================================================
 
           echo "=== Search struct udp6_sock ==="
 
@@ -1621,31 +1533,14 @@ jobs:
             | head -n 1)
 
           if [ -z "$UDP6_HEADER" ]; then
-
             echo "❌ 找不到 struct udp6_sock"
-
-            grep -Rns \
-              "udp6_sock" \
-              "$COMMON_DIR/include" \
-              2>/dev/null \
-              | head -n 50 \
-              || true
-
             exit 1
-
           fi
 
           UDP6_HEADER_REL="${UDP6_HEADER#$COMMON_DIR/include/}"
 
-          echo "✅ 找到 struct udp6_sock:"
-          echo "$UDP6_HEADER"
-
-          echo "✅ include 路径:"
+          echo "✅ udp6_sock:"
           echo "$UDP6_HEADER_REL"
-
-          # ============================================================
-          # tcp_timewait_sock
-          # ============================================================
 
           echo "=== Search struct tcp_timewait_sock ==="
 
@@ -1656,31 +1551,14 @@ jobs:
             | head -n 1)
 
           if [ -z "$TCP_TW_HEADER" ]; then
-
             echo "❌ 找不到 struct tcp_timewait_sock"
-
-            grep -Rns \
-              "tcp_timewait_sock" \
-              "$COMMON_DIR/include" \
-              2>/dev/null \
-              | head -n 50 \
-              || true
-
             exit 1
-
           fi
 
           TCP_TW_HEADER_REL="${TCP_TW_HEADER#$COMMON_DIR/include/}"
 
-          echo "✅ 找到 struct tcp_timewait_sock:"
-          echo "$TCP_TW_HEADER"
-
-          echo "✅ include 路径:"
+          echo "✅ tcp_timewait_sock:"
           echo "$TCP_TW_HEADER_REL"
-
-          # ============================================================
-          # tcp_sock
-          # ============================================================
 
           echo "=== Check struct tcp_sock ==="
 
@@ -1688,24 +1566,11 @@ jobs:
             'struct[[:space:]]+tcp_sock[[:space:]]*\{' \
             "$TCP_TW_HEADER"; then
 
-            echo "❌ TCP 头文件中没有找到 struct tcp_sock"
-
-            grep -RnsE \
-              'struct[[:space:]]+tcp_sock[[:space:]]*\{' \
-              "$COMMON_DIR/include" \
-              2>/dev/null \
-              | head -n 50 \
-              || true
-
+            echo "❌ 找不到 struct tcp_sock"
             exit 1
-
           fi
 
           echo "✅ 找到 struct tcp_sock"
-
-          # ============================================================
-          # tcp_request_sock
-          # ============================================================
 
           echo "=== Search struct tcp_request_sock ==="
 
@@ -1716,31 +1581,14 @@ jobs:
             | head -n 1)
 
           if [ -z "$TCP_REQ_HEADER" ]; then
-
             echo "❌ 找不到 struct tcp_request_sock"
-
-            grep -Rns \
-              "tcp_request_sock" \
-              "$COMMON_DIR/include" \
-              2>/dev/null \
-              | head -n 50 \
-              || true
-
             exit 1
-
           fi
 
           TCP_REQ_HEADER_REL="${TCP_REQ_HEADER#$COMMON_DIR/include/}"
 
-          echo "✅ 找到 struct tcp_request_sock:"
-          echo "$TCP_REQ_HEADER"
-
-          echo "✅ include 路径:"
+          echo "✅ tcp_request_sock:"
           echo "$TCP_REQ_HEADER_REL"
-
-          # ============================================================
-          # tcp6_sock
-          # ============================================================
 
           echo "=== Search struct tcp6_sock ==="
 
@@ -1751,31 +1599,14 @@ jobs:
             | head -n 1)
 
           if [ -z "$TCP6_HEADER" ]; then
-
             echo "❌ 找不到 struct tcp6_sock"
-
-            grep -Rns \
-              "tcp6_sock" \
-              "$COMMON_DIR/include" \
-              2>/dev/null \
-              | head -n 50 \
-              || true
-
             exit 1
-
           fi
 
           TCP6_HEADER_REL="${TCP6_HEADER#$COMMON_DIR/include/}"
 
-          echo "✅ 找到 struct tcp6_sock:"
-          echo "$TCP6_HEADER"
-
-          echo "✅ include 路径:"
+          echo "✅ tcp6_sock:"
           echo "$TCP6_HEADER_REL"
-
-          # ============================================================
-          # netlink_sock
-          # ============================================================
 
           echo "=== Check struct netlink_sock ==="
 
@@ -1793,20 +1624,15 @@ jobs:
               || true
 
             exit 1
-
           fi
 
-          echo "✅ 找到 struct netlink_sock:"
+          echo "✅ 找到 struct netlink_sock"
 
           grep -n \
             "struct netlink_sock" \
             "$AF_NETLINK_H" \
             | head -n 20 \
             || true
-
-          # ============================================================
-          # BTF_TYPE_EMIT
-          # ============================================================
 
           echo "=== Check BTF_TYPE_EMIT ==="
 
@@ -1816,12 +1642,8 @@ jobs:
             2>/dev/null; then
 
             echo "❌ 找不到 BTF_TYPE_EMIT"
-
             exit 1
-
           fi
-
-          echo "✅ 找到 BTF_TYPE_EMIT"
 
           grep -Rn \
             "define BTF_TYPE_EMIT" \
@@ -1830,19 +1652,14 @@ jobs:
             | head -n 5 \
             || true
 
-          # ============================================================
-          # 创建前 7 个类型的普通 BTF helper
-          #
-          # netlink_sock 不放这里。
-          # ============================================================
+          echo "=== Create normal BTF helper ==="
 
           cat > "$BTF_EMIT_C" <<EOF
           // SPDX-License-Identifier: GPL-2.0
           /*
            * Force selected kernel types into DWARF/BTF.
            *
-           * netlink_sock is intentionally NOT handled here.
-           * It is forced from net/netlink/af_netlink.c instead.
+           * netlink_sock is intentionally handled in af_netlink.c.
            */
 
           #include <linux/compiler.h>
@@ -1871,19 +1688,9 @@ jobs:
           }
           EOF
 
-          echo "=== Created normal BTF helper ==="
-
           cat "$BTF_EMIT_C"
 
-          # ============================================================
-          # kernel/Makefile
-          #
-          # 保留 helper。
-          #
-          # 清理上一版可能残留的：
-          #
-          #   CFLAGS_btf_xdp_buff_emit.o += -fstandalone-debug
-          # ============================================================
+          echo "=== Configure kernel/Makefile ==="
 
           sed -i \
             '/CFLAGS_btf_xdp_buff_emit\.o[[:space:]]*+=[[:space:]]*-fstandalone-debug/d' \
@@ -1894,51 +1701,14 @@ jobs:
             "$KERNEL_MAKEFILE"; then
 
             echo "" >> "$KERNEL_MAKEFILE"
-
-            echo \
-              '# Force required types into BTF' \
-              >> "$KERNEL_MAKEFILE"
-
-            echo \
-              'obj-$(CONFIG_DEBUG_INFO_BTF) += btf_xdp_buff_emit.o' \
-              >> "$KERNEL_MAKEFILE"
-
+            echo '# Force required types into BTF' >> "$KERNEL_MAKEFILE"
+            echo 'obj-$(CONFIG_DEBUG_INFO_BTF) += btf_xdp_buff_emit.o' >> "$KERNEL_MAKEFILE"
           fi
-
-          echo "=== kernel/Makefile helper entries ==="
 
           grep -n \
             'btf_xdp_buff_emit' \
             "$KERNEL_MAKEFILE" \
             || true
-
-          # ============================================================
-          # patch af_netlink.c
-          #
-          # 这次 netlink_sock 直接从真实 TU 保留。
-          #
-          # 第一步：
-          #
-          #   #include "af_netlink.h"
-          #
-          # 后创建：
-          #
-          #   static struct netlink_sock
-          #   btf_force_netlink_sock_object __used;
-          #
-          # 第二步：
-          #
-          # 在：
-          #
-          #   static int __init netlink_proto_init(void)
-          #   {
-          #       int i;
-          #       int err = proto_register(...);
-          #
-          # 之后插入 asm。
-          #
-          # 这样不会违反 C90。
-          # ============================================================
 
           echo "=== Patch af_netlink.c for netlink_sock BTF ==="
 
@@ -1948,23 +1718,12 @@ jobs:
           from pathlib import Path
 
           path = Path(sys.argv[1])
-
           text = path.read_text()
 
           object_marker = "BTF_FORCE_NETLINK_SOCK_OBJECT"
           init_marker = "BTF_FORCE_NETLINK_SOCK_INIT"
 
-          # ============================================================
-          # 1. 在 #include "af_netlink.h" 后插入完整 struct 对象
-          #
-          # 只允许在 af_netlink.h 后面插入。
-          #
-          # 不再 fallback 到 <net/netlink.h>，因为 struct netlink_sock
-          # 的完整定义来自 af_netlink.h。
-          # ============================================================
-
           if object_marker not in text:
-
               pattern = re.compile(
                   r'(#include\s+"af_netlink\.h"[^\n]*\n)'
               )
@@ -1972,12 +1731,7 @@ jobs:
               match = pattern.search(text)
 
               if not match:
-
-                  print(
-                      'ERROR: could not find '
-                      '#include "af_netlink.h"'
-                  )
-
+                  print('ERROR: could not find #include "af_netlink.h"')
                   sys.exit(1)
 
               injection = match.group(1) + r'''
@@ -1985,8 +1739,8 @@ jobs:
           /*
            * BTF_FORCE_NETLINK_SOCK_OBJECT
            *
-           * Real complete object in the translation unit that owns
-           * struct netlink_sock.
+           * Keep a real complete struct netlink_sock object in
+           * the translation unit that owns the type.
            */
           static struct netlink_sock
           btf_force_netlink_sock_object __used;
@@ -1999,23 +1753,7 @@ jobs:
                   + text[match.end():]
               )
 
-          # ============================================================
-          # 2. netlink_proto_init()
-          #
-          # Linux kernel 这里要求 C90 declaration ordering。
-          #
-          # 当前源码已经确认是：
-          #
-          # static int __init netlink_proto_init(void)
-          # {
-          #     int i;
-          #     int err = proto_register(&netlink_proto, 0);
-          #
-          # 必须在 int i / int err 声明完成以后再插入 asm。
-          # ============================================================
-
           if init_marker not in text:
-
               pattern = re.compile(
                   r'('
                   r'(?:static\s+)?'
@@ -2033,14 +1771,10 @@ jobs:
               match = pattern.search(text)
 
               if not match:
-
                   print(
                       "ERROR: could not find "
                       "netlink_proto_init declaration block"
                   )
-
-                  print("")
-                  print("=== netlink_proto_init source ===")
 
                   m = re.search(
                       r'netlink_proto_init\s*\(\s*void\s*\)',
@@ -2048,20 +1782,12 @@ jobs:
                   )
 
                   if m:
+                      start = max(0, m.start() - 300)
+                      end = min(len(text), m.start() + 1800)
 
-                      start = max(
-                          0,
-                          m.start() - 300
-                      )
-
-                      end = min(
-                          len(text),
-                          m.start() + 1600
-                      )
-
-                      print(
-                          text[start:end]
-                      )
+                      print("")
+                      print("=== netlink_proto_init source ===")
+                      print(text[start:end])
 
                   sys.exit(1)
 
@@ -2069,13 +1795,8 @@ jobs:
               /*
                * BTF_FORCE_NETLINK_SOCK_INIT
                *
-               * Concrete, non-removable reference to the real
-               * struct netlink_sock object.
-               *
-               * IMPORTANT:
-               *
-               * This code is intentionally placed AFTER all local
-               * declarations to satisfy kernel C90 rules.
+               * This is intentionally after local declarations
+               * because this kernel enforces C90 declaration order.
                */
               asm volatile(
                   ""
@@ -2099,152 +1820,90 @@ jobs:
 
           echo "✅ af_netlink.c patch applied"
 
-          # ============================================================
-          # 验证 object
-          # ============================================================
-
-          echo "=== Verify af_netlink object patch ==="
+          echo "=== Verify netlink object ==="
 
           grep -n \
-            -B 6 \
-            -A 18 \
+            -B 5 \
+            -A 15 \
             'BTF_FORCE_NETLINK_SOCK_OBJECT' \
             "$AF_NETLINK_C" \
             || true
 
-          # ============================================================
-          # 验证 init patch
-          #
-          # 这次重点看：
-          #
-          #   int i;
-          #   int err = ...
-          #
-          # 必须出现在：
-          #
-          #   BTF_FORCE_NETLINK_SOCK_INIT
-          #
-          # 前面。
-          # ============================================================
-
           echo ""
 
-          echo "=== Verify netlink_proto_init patch ==="
+          echo "=== Verify netlink init patch ==="
 
           grep -n \
-            -B 12 \
-            -A 32 \
+            -B 15 \
+            -A 30 \
             'BTF_FORCE_NETLINK_SOCK_INIT' \
             "$AF_NETLINK_C" \
             || true
 
-          # ============================================================
-          # 自动检查 C90 顺序
-          # ============================================================
+          echo "=== Verify C90 declaration order ==="
 
           python3 - "$AF_NETLINK_C" <<'PY'
+          import re
           import sys
           from pathlib import Path
 
-          path = Path(sys.argv[1])
+          text = Path(sys.argv[1]).read_text()
 
-          text = path.read_text()
+          func = re.search(
+              r'netlink_proto_init\s*\(\s*void\s*\)\s*\{'
+              r'(?P<body>.*?)'
+              r'\n\}',
+              text,
+              re.S
+          )
 
-          marker = "BTF_FORCE_NETLINK_SOCK_INIT"
-
-          marker_pos = text.find(marker)
-
-          if marker_pos < 0:
-              print("ERROR: netlink init marker missing")
+          if not func:
+              print("ERROR: netlink_proto_init not found")
               sys.exit(1)
 
-          i_pos = text.rfind(
-              "int i;",
-              0,
-              marker_pos
-          )
+          body = func.group("body")
 
-          err_pos = text.rfind(
-              "int err = proto_register",
-              0,
-              marker_pos
-          )
+          marker = body.find("BTF_FORCE_NETLINK_SOCK_INIT")
+          i_pos = body.find("int i;")
+          err_pos = body.find("int err = proto_register")
+
+          if marker < 0:
+              print("ERROR: BTF init marker missing")
+              sys.exit(1)
 
           if i_pos < 0:
-              print(
-                  "ERROR: int i declaration was not found "
-                  "before BTF patch"
-              )
+              print("ERROR: int i declaration missing")
               sys.exit(1)
 
           if err_pos < 0:
-              print(
-                  "ERROR: int err declaration was not found "
-                  "before BTF patch"
-              )
+              print("ERROR: int err declaration missing")
               sys.exit(1)
 
-          if not (
-              i_pos < err_pos < marker_pos
-          ):
-              print(
-                  "ERROR: invalid C90 declaration order"
-              )
-
-              print(
-                  "i_pos      =",
-                  i_pos
-              )
-
-              print(
-                  "err_pos    =",
-                  err_pos
-              )
-
-              print(
-                  "marker_pos =",
-                  marker_pos
-              )
-
+          if not (i_pos < err_pos < marker):
+              print("ERROR: invalid C90 declaration order")
+              print("int i position:", i_pos)
+              print("int err position:", err_pos)
+              print("BTF marker position:", marker)
               sys.exit(1)
 
-          print(
-              "✅ C90 declaration order verified"
-          )
+          print("✅ C90 declaration order verified")
           PY
 
-          # ============================================================
-          # af_netlink.o standalone DWARF
-          # ============================================================
-
-          echo "=== Add af_netlink.o standalone DWARF ==="
+          echo "=== Configure af_netlink.o standalone DWARF ==="
 
           if ! grep -qF \
             'CFLAGS_af_netlink.o += -fstandalone-debug' \
             "$NETLINK_MAKEFILE"; then
 
             echo "" >> "$NETLINK_MAKEFILE"
-
-            echo \
-              '# Preserve complete netlink_sock DWARF/BTF type' \
-              >> "$NETLINK_MAKEFILE"
-
-            echo \
-              'CFLAGS_af_netlink.o += -fstandalone-debug' \
-              >> "$NETLINK_MAKEFILE"
-
+            echo '# Preserve complete netlink_sock DWARF/BTF type' >> "$NETLINK_MAKEFILE"
+            echo 'CFLAGS_af_netlink.o += -fstandalone-debug' >> "$NETLINK_MAKEFILE"
           fi
-
-          echo "=== net/netlink/Makefile BTF entry ==="
 
           grep -n \
             'CFLAGS_af_netlink.o' \
             "$NETLINK_MAKEFILE" \
             || true
-
-          # ============================================================
-          # 最终 BTF patch 验证
-          # ============================================================
 
           echo "=== Final BTF patch verification ==="
 
@@ -2253,9 +1912,7 @@ jobs:
             "$BTF_EMIT_C"; then
 
             echo "❌ netlink_sock 不应该存在于独立 helper"
-
             exit 1
-
           fi
 
           if ! grep -q \
@@ -2263,19 +1920,15 @@ jobs:
             "$AF_NETLINK_C"; then
 
             echo "❌ af_netlink.c 中缺少 netlink_sock object"
-
             exit 1
-
           fi
 
           if ! grep -q \
             'BTF_FORCE_NETLINK_SOCK_INIT' \
             "$AF_NETLINK_C"; then
 
-            echo "❌ af_netlink.c 中缺少 init 强制引用"
-
+            echo "❌ af_netlink.c 中缺少 netlink init patch"
             exit 1
-
           fi
 
           if ! grep -qF \
@@ -2283,39 +1936,19 @@ jobs:
             "$NETLINK_MAKEFILE"; then
 
             echo "❌ af_netlink.o 缺少 -fstandalone-debug"
-
             exit 1
-
           fi
 
-          echo "✅ 前 7 个类型：独立 BTF helper"
-          echo "✅ netlink_sock：af_netlink.c 真实 TU"
-          echo "✅ netlink_sock object：已创建"
-          echo "✅ netlink_proto_init：真实地址引用"
+          echo "✅ 前 7 个类型：BTF helper"
+          echo "✅ netlink_sock：af_netlink.c"
           echo "✅ C90 declaration order：正确"
           echo "✅ af_netlink.o：-fstandalone-debug"
-
-          # ============================================================
-          # Android host tools
-          #
-          # 不设置：
-          #
-          #   LD=/usr/bin/ld
-          #   HOSTLD=/usr/bin/ld
-          #   export PATH=/usr/bin:$PATH
-          #
-          # 继续使用已经验证成功的 Android build-tools 路径。
-          # ============================================================
 
           echo "=== Fix host build tools ==="
 
           BUILD_TOOLS_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/build/build-tools/path/linux-x86"
 
           mkdir -p "$BUILD_TOOLS_BIN"
-
-          # ============================================================
-          # Android Clang ld.lld
-          # ============================================================
 
           LLD_BIN=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" \
             -type f \
@@ -2324,11 +1957,8 @@ jobs:
             | head -n 1)
 
           if [ -z "$LLD_BIN" ]; then
-
             echo "❌ 找不到 Android Clang ld.lld"
-
             exit 1
-
           fi
 
           echo "✅ 找到 ld.lld:"
@@ -2338,41 +1968,23 @@ jobs:
             "$LLD_BIN" \
             "$BUILD_TOOLS_BIN/ld"
 
-          # ============================================================
-          # dd
-          # ============================================================
-
           if [ ! -x /usr/bin/dd ]; then
-
             echo "❌ /usr/bin/dd 不存在"
-
             exit 1
-
           fi
 
           ln -sf \
             /usr/bin/dd \
             "$BUILD_TOOLS_BIN/dd"
 
-          # ============================================================
-          # printf
-          # ============================================================
-
           if [ ! -x /usr/bin/printf ]; then
-
             echo "❌ /usr/bin/printf 不存在"
-
             exit 1
-
           fi
 
           ln -sf \
             /usr/bin/printf \
             "$BUILD_TOOLS_BIN/printf"
-
-          # ============================================================
-          # Host tool 验证
-          # ============================================================
 
           echo "=== Host tools aliases ==="
 
@@ -2396,10 +2008,6 @@ jobs:
             | head -n 1 \
             || true
 
-          # ============================================================
-          # 编译日志
-          # ============================================================
-
           BUILD_LOG="$GITHUB_WORKSPACE/kernel-build.log"
           STATUS_FILE="$GITHUB_WORKSPACE/kernel-build-status.txt"
 
@@ -2407,22 +2015,19 @@ jobs:
           rm -f "$STATUS_FILE"
 
           echo "=== 开始内核编译 ==="
-
+          echo "CPUD=$CPUD"
+          echo "BUILD_METHOD=$BUILD_METHOD"
           echo "完整日志保存到:"
           echo "$BUILD_LOG"
 
           set +e
 
-          # ============================================================
-          # Bazel
-          # ============================================================
-
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
 
             (
               ./kernel_platform/oplus/bazel/oplus_modules_variant.sh \
-                "${{ env.CPUD }}" \
-                "${{ env.BUILD_METHOD }}"
+                "$CPUD" \
+                "$BUILD_METHOD"
 
               MODULE_STATUS=$?
 
@@ -2430,13 +2035,12 @@ jobs:
 
                 PAHOLE="$PAHOLE_BIN" \
                   ./kernel_platform/build_with_bazel.py \
-                  -t "${{ env.CPUD }}" \
-                  "${{ env.BUILD_METHOD }}"
+                  -t "$CPUD" \
+                  "$BUILD_METHOD"
 
               else
 
                 echo "❌ oplus_modules_variant.sh 失败"
-
                 exit "$MODULE_STATUS"
 
               fi
@@ -2444,10 +2048,6 @@ jobs:
             ) > "$BUILD_LOG" 2>&1
 
             BUILD_STATUS=$?
-
-          # ============================================================
-          # OPPO build
-          # ============================================================
 
           else
 
@@ -2457,8 +2057,8 @@ jobs:
             BUILD_SYSTEM_DLKM=0 \
             KMI_SYMBOL_LIST_STRICT_MODE=0 \
               ./kernel_platform/oplus/build/oplus_build_kernel.sh \
-              "${{ env.CPUD }}" \
-              "${{ env.BUILD_METHOD }}" \
+              "$CPUD" \
+              "$BUILD_METHOD" \
               > "$BUILD_LOG" 2>&1
 
             BUILD_STATUS=$?
@@ -2467,22 +2067,11 @@ jobs:
 
           set -e
 
-          # ============================================================
-          # 保存外层 build exit code
-          # ============================================================
-
           echo "$BUILD_STATUS" \
             > "$STATUS_FILE"
 
           echo "=== 官方构建脚本退出码 ==="
-
           echo "$BUILD_STATUS"
-
-          # ============================================================
-          # 实际检查编译产物
-          #
-          # OPPO 外层 build script 可能吞掉内部 make 错误。
-          # ============================================================
 
           IMAGE=$(find ./kernel_platform/out \
             -type f \
@@ -2508,37 +2097,26 @@ jobs:
           echo "Image.lz4 = ${IMAGE_LZ4:-未找到}"
           echo "vmlinux   = ${VMLINUX:-未找到}"
 
-          # ============================================================
-          # 最终成功判断
-          # ============================================================
-
           if [ -z "$IMAGE" ] && [ -z "$IMAGE_LZ4" ]; then
 
             echo ""
-
             echo "❌ 内核没有生成 Image / Image.lz4"
-
             echo "请查看后面的 Show Kernel Build Error"
 
             exit 1
-
           fi
 
           if [ "$BUILD_STATUS" -ne 0 ]; then
 
             echo ""
-
             echo "❌ 官方构建脚本返回错误:"
             echo "$BUILD_STATUS"
 
             exit "$BUILD_STATUS"
-
           fi
 
           echo ""
-
           echo "✅ 内核编译成功"
-
           echo "=== 最终内核文件 ==="
 
           find ./kernel_platform/out \
@@ -2559,21 +2137,14 @@ jobs:
           STATUS_FILE="$GITHUB_WORKSPACE/kernel-build-status.txt"
 
           if [ -f "$STATUS_FILE" ]; then
-
             echo "=== Kernel build exit code ==="
-
             cat "$STATUS_FILE"
-
             echo ""
-
           fi
 
           if [ ! -f "$LOG" ]; then
-
             echo "⚠️ kernel-build.log 不存在"
-
             exit 0
-
           fi
 
           echo "================ 关键错误 ================="
@@ -2601,7 +2172,7 @@ jobs:
           grep -nEi \
             'CC +kernel/btf_xdp_buff_emit.o|CC +net/netlink/af_netlink.o|LD +\.tmp_vmlinux\.btf|BTF +\.btf\.vmlinux\.bin\.o|BTFIDS +vmlinux' \
             "$LOG" \
-            | tail -n 120 \
+            | tail -n 150 \
             || true
 
           echo ""
@@ -2623,7 +2194,7 @@ jobs:
           grep -n \
             'FAILED unresolved symbol' \
             "$LOG" \
-            | tail -n 80 \
+            | tail -n 100 \
             || true
 
           echo ""

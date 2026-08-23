@@ -1480,6 +1480,7 @@ jobs:
           #   FAILED unresolved symbol tcp_timewait_sock
           #   FAILED unresolved symbol tcp_sock
           #   FAILED unresolved symbol tcp_request_sock
+          #   FAILED unresolved symbol tcp6_sock
           #
           # 强制把这些类型写入 DWARF / BTF。
           # ============================================================
@@ -1707,9 +1708,6 @@ jobs:
 
           # ============================================================
           # 自动查找 struct tcp_request_sock
-          #
-          # 不直接假设它一定在 linux/tcp.h，
-          # 自动寻找真实定义所在的头文件。
           # ============================================================
           echo "=== Search struct tcp_request_sock ==="
 
@@ -1747,6 +1745,50 @@ jobs:
           grep -n \
             "struct tcp_request_sock" \
             "$TCP_REQ_HEADER" \
+            | head -n 10 \
+            || true
+
+          # ============================================================
+          # 自动查找 struct tcp6_sock
+          #
+          # 不硬编码头文件位置。
+          # ============================================================
+          echo "=== Search struct tcp6_sock ==="
+
+          TCP6_HEADER=$(grep -RslE \
+            'struct[[:space:]]+tcp6_sock[[:space:]]*\{' \
+            "$COMMON_DIR/include" \
+            2>/dev/null \
+            | head -n 1)
+
+          if [ -z "$TCP6_HEADER" ]; then
+
+            echo "❌ 找不到 struct tcp6_sock 的定义"
+
+            echo "=== tcp6_sock 搜索结果 ==="
+
+            grep -Rns \
+              "tcp6_sock" \
+              "$COMMON_DIR/include" \
+              2>/dev/null \
+              | head -n 50 \
+              || true
+
+            exit 1
+
+          fi
+
+          TCP6_HEADER_REL="${TCP6_HEADER#$COMMON_DIR/include/}"
+
+          echo "✅ 找到 struct tcp6_sock:"
+          echo "$TCP6_HEADER"
+
+          echo "✅ include 路径:"
+          echo "$TCP6_HEADER_REL"
+
+          grep -n \
+            "struct tcp6_sock" \
+            "$TCP6_HEADER" \
             | head -n 10 \
             || true
 
@@ -1796,6 +1838,7 @@ jobs:
            *   FAILED unresolved symbol tcp_timewait_sock
            *   FAILED unresolved symbol tcp_sock
            *   FAILED unresolved symbol tcp_request_sock
+           *   FAILED unresolved symbol tcp6_sock
            */
 
           #include <linux/compiler.h>
@@ -1835,6 +1878,11 @@ jobs:
            */
           #include <${TCP_REQ_HEADER_REL}>
 
+          /*
+           * struct tcp6_sock
+           */
+          #include <${TCP6_HEADER_REL}>
+
           static __used noinline void btf_force_emit_required_types(void)
           {
               BTF_TYPE_EMIT(struct xdp_buff);
@@ -1843,6 +1891,7 @@ jobs:
               BTF_TYPE_EMIT(struct tcp_timewait_sock);
               BTF_TYPE_EMIT(struct tcp_sock);
               BTF_TYPE_EMIT(struct tcp_request_sock);
+              BTF_TYPE_EMIT(struct tcp6_sock);
           }
           EOF
 
@@ -1881,9 +1930,9 @@ jobs:
           # ============================================================
           # 修复 Android 12 / Kernel 5.10 host 构建环境
           #
-          # 1. clang-12 链接 resolve_btfids 时寻找 ld
-          # 2. Android / OPPO build 会重置 PATH
-          # 3. 导致 dd / printf 找不到
+          # clang-12 链接 resolve_btfids 时会寻找 ld。
+          # Android / OPPO build 又会重置 PATH，
+          # 所以把 ld / dd / printf 放入其固定 build-tools PATH。
           # ============================================================
           echo "=== Fix host build tools ==="
 
@@ -1974,7 +2023,6 @@ jobs:
           # 保存完整编译日志
           # ============================================================
           BUILD_LOG="$GITHUB_WORKSPACE/kernel-build.log"
-
           STATUS_FILE="$GITHUB_WORKSPACE/kernel-build-status.txt"
 
           rm -f "$BUILD_LOG"
@@ -2151,7 +2199,7 @@ jobs:
           echo "================ 关键错误 ================="
 
           grep -nEi \
-            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
+            'error:|fatal:|undefined reference|unresolved symbol|No such file or directory|FAILED|make(\[[0-9]+\])?: \*\*\*|BTF|BTFIDS|pahole|resolve_btfids|xdp_buff|udp_sock|udp6_sock|tcp_timewait_sock|tcp_sock|tcp_request_sock|tcp6_sock|seq_file|bpf_prog|Segmentation fault|Killed' \
             "$LOG" \
             | tail -n 150 \
             || true

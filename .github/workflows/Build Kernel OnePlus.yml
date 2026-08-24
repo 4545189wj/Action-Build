@@ -1496,6 +1496,12 @@ jobs:
 
           IMAGE_SANITY_UNPACKED="$GITHUB_WORKSPACE/Image-sanity-unpacked"
 
+          BTF_OBJECT_RAW="$GITHUB_WORKSPACE/btf-object-before-btfids.btf"
+
+          BTF_DEEP_FILE="$GITHUB_WORKSPACE/btf-deep-analysis.txt"
+
+          PAHOLE_RUNTIME_FILE="$GITHUB_WORKSPACE/pahole-runtime.txt"
+
           # ============================================================
           # Clear old diagnostics
           # ============================================================
@@ -1518,6 +1524,11 @@ jobs:
           rm -f "$BTF_SANITY_FILE"
           rm -f "$FINAL_BTF_CHECK"
           rm -f "$IMAGE_SANITY_UNPACKED"
+          rm -f "$BTF_OBJECT_RAW"
+
+          rm -f "$BTF_DEEP_FILE"
+
+          rm -f "$PAHOLE_RUNTIME_FILE"
 
           # ============================================================
           # pahole
@@ -2494,6 +2505,115 @@ jobs:
           fi
 
           # ============================================================
+          # Instrument the real pahole invocation inside link-vmlinux.sh
+          #
+          # 目的：确认 BTF 阶段实际执行的 pahole 路径、版本、环境变量
+          # 以及完整展开后的命令。不会修改 pahole 参数本身。
+          # ============================================================
+
+          echo "=== Instrument runtime pahole invocation ==="
+
+          python3 - "$LINK_VMLINUX_SH" <<'PY'
+          import shlex
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+
+          marker = "BTF_DIAG_PAHOLE_RUNTIME"
+
+          if marker in text:
+              print("✅ runtime pahole instrumentation already exists")
+              raise SystemExit(0)
+
+          lines = text.splitlines(keepends=True)
+          candidates = []
+
+          for i, line in enumerate(lines):
+              stripped = line.strip()
+
+              if not stripped or stripped.startswith("#"):
+                  continue
+
+              if "PAHOLE" not in stripped:
+                  continue
+
+              if "--version" in stripped:
+                  continue
+
+              if "-J" in stripped or "btf_encode" in stripped:
+                  candidates.append(i)
+
+          if not candidates:
+              print("⚠️ 没找到明确的 pahole BTF encode 命令")
+              print("=== PAHOLE related source lines ===")
+              for n, line in enumerate(lines, 1):
+                  if "PAHOLE" in line or "pahole" in line:
+                      print(f"{n}: {line.rstrip()}")
+              raise SystemExit(0)
+
+          start = candidates[0]
+          end = start
+
+          # 收完整的反斜杠续行命令。
+          while end < len(lines) - 1 and lines[end].rstrip().endswith("\\"):
+              end += 1
+
+          source_cmd = " ".join(
+              part.strip().rstrip("\\").strip()
+              for part in lines[start:end + 1]
+          )
+
+          indent = lines[start][
+              :len(lines[start]) - len(lines[start].lstrip())
+          ]
+
+          quoted_source = shlex.quote(source_cmd)
+
+          before = [
+              indent + "# BTF_DIAG_PAHOLE_RUNTIME\n",
+              indent + 'echo "BTFDIAG PAHOLE_RUNTIME_PATH=${PAHOLE}" >&2\n',
+              indent + 'echo "BTFDIAG PAHOLE_RUNTIME_VERSION=$(${PAHOLE} --version 2>&1 | head -n 1)" >&2\n',
+              indent + 'echo "BTFDIAG PAHOLE_FLAGS=${PAHOLE_FLAGS:-<unset>}" >&2\n',
+              indent + 'echo "BTFDIAG OBJCOPY=${OBJCOPY:-<unset>}" >&2\n',
+              indent + f"echo BTFDIAG_PAHOLE_SOURCE={quoted_source} >&2\n",
+              indent + 'if [ -n "${GITHUB_WORKSPACE:-}" ]; then\n',
+              indent + '    {\n',
+              indent + '        echo "PAHOLE_RUNTIME_PATH=${PAHOLE}"\n',
+              indent + '        echo "PAHOLE_RUNTIME_VERSION=$(${PAHOLE} --version 2>&1 | head -n 1)"\n',
+              indent + '        echo "PAHOLE_FLAGS=${PAHOLE_FLAGS:-<unset>}"\n',
+              indent + '        echo "OBJCOPY=${OBJCOPY:-<unset>}"\n',
+              indent + f"        echo PAHOLE_SOURCE={quoted_source}\n",
+              indent + '    } >> "${GITHUB_WORKSPACE}/pahole-runtime.txt"\n',
+              indent + 'fi\n',
+              indent + 'set -x\n',
+          ]
+
+          after = [
+              indent + 'set +x\n',
+          ]
+
+          lines[start:start] = before
+          end += len(before)
+          lines[end + 1:end + 1] = after
+
+          path.write_text("".join(lines))
+
+          print("✅ runtime pahole instrumentation applied")
+          print(f"source command: {source_cmd}")
+          PY
+
+          echo "=== Verify runtime pahole instrumentation ==="
+
+          grep -n \
+            -B 8 \
+            -A 30 \
+            'BTF_DIAG_PAHOLE_RUNTIME' \
+            "$LINK_VMLINUX_SH" \
+            || true
+
+          # ============================================================
           # Patch link-vmlinux.sh
           #
           # 在真正 ${RESOLVE_BTFIDS} vmlinux 之前保存：
@@ -3155,26 +3275,24 @@ jobs:
           fi
 
           # ============================================================
-          # Final Image / BTF sanity check
+          # Final Image / BTF deep analysis + safety gate
           #
-          # 这不是关闭 BTF，也不是绕过 BTF_IDS。
-          # 只是拒绝打包异常巨大的 BTF / Image。
+          # 注意顺序：
+          #   1. 先提取并完整分析最终 .BTF
+          #   2. 再分析保存的 .btf.vmlinux.bin.o
+          #   3. 打印 SHA256 / type count / STRUCT 重复统计
+          #   4. 最后统一做安全拦截
           #
-          # 当前已知坏包约为：
-          #   Image ~= 155 MiB
-          #   .BTF  ~= 118 MiB
-          #   type_count ~= 2,477,674
-          #
-          # 安全线故意留得很宽：
-          #   Image <= 128 MiB
-          #   .BTF  <= 64 MiB
-          #   BTF types <= 500,000
+          # 所以即使 Image 仍然是 155 MiB，也不会再提前 exit 44
+          # 而丢掉真正需要的 BTF 诊断数据。
           # ============================================================
 
-          echo "=== Final Image / BTF sanity check ==="
+          echo "=== Final Image / BTF deep analysis ==="
 
           rm -f "$BTF_SANITY_FILE"
           rm -f "$FINAL_BTF_CHECK"
+          rm -f "$BTF_OBJECT_RAW"
+          rm -f "$BTF_DEEP_FILE"
           rm -f "$IMAGE_SANITY_UNPACKED"
 
           CHECK_IMAGE="$IMAGE"
@@ -3210,11 +3328,11 @@ jobs:
 
           fi
 
-          IMAGE_SIZE=$(stat -c '%s' "$CHECK_IMAGE")
-
           MAX_IMAGE_SIZE=$((128 * 1024 * 1024))
           MAX_BTF_SIZE=$((64 * 1024 * 1024))
           MAX_BTF_TYPES=500000
+
+          IMAGE_SIZE=$(stat -c '%s' "$CHECK_IMAGE")
 
           IMAGE_MIB=$(python3 - "$IMAGE_SIZE" <<'PY'
           import sys
@@ -3225,16 +3343,11 @@ jobs:
           echo "Image bytes = $IMAGE_SIZE"
           echo "Image MiB   = $IMAGE_MIB"
 
-          if [ "$IMAGE_SIZE" -gt "$MAX_IMAGE_SIZE" ]; then
+          # ============================================================
+          # Extract final vmlinux .BTF FIRST — never gate before this.
+          # ============================================================
 
-            echo "❌ Image 大于 128 MiB"
-            echo "❌ 拒绝继续打包，防止再次刷入异常巨型内核"
-
-            exit 44
-
-          fi
-
-          echo "=== Extract final .BTF ==="
+          echo "=== Extract final vmlinux .BTF ==="
 
           "$LLVM_OBJCOPY_BIN" \
             --dump-section \
@@ -3259,22 +3372,73 @@ jobs:
           echo ".BTF bytes = $BTF_SIZE"
           echo ".BTF MiB   = $BTF_MIB"
 
-          if [ "$BTF_SIZE" -gt "$MAX_BTF_SIZE" ]; then
+          # ============================================================
+          # Extract .BTF from saved .btf.vmlinux.bin.o when available.
+          # ============================================================
 
-            echo "❌ .BTF 大于 64 MiB"
-            echo "❌ BTF 仍然异常膨胀，停止打包"
+          if [ -f "$SAVED_BTF_BIN" ]; then
 
-            exit 43
+            echo "=== Extract .BTF from saved BTF object ==="
+
+            "$LLVM_OBJCOPY_BIN" \
+              --dump-section \
+              ".BTF=$BTF_OBJECT_RAW" \
+              "$SAVED_BTF_BIN" \
+              2>/dev/null \
+              || true
 
           fi
+
+          # ============================================================
+          # SHA256 / byte comparison.
+          # ============================================================
+
+          echo "=== Raw BTF SHA256 ==="
+
+          sha256sum "$FINAL_BTF_CHECK" || true
+
+          if [ -s "$BTF_OBJECT_RAW" ]; then
+
+            sha256sum "$BTF_OBJECT_RAW" || true
+
+            if cmp -s \
+              "$FINAL_BTF_CHECK" \
+              "$BTF_OBJECT_RAW"; then
+
+              echo "FINAL_VMLINUX_BTF_IDENTICAL_TO_OBJECT=YES"
+
+            else
+
+              echo "FINAL_VMLINUX_BTF_IDENTICAL_TO_OBJECT=NO"
+
+            fi
+
+          else
+
+            echo "BTF_OBJECT_RAW_AVAILABLE=NO"
+
+          fi
+
+          # ============================================================
+          # Deep raw BTF parser.
+          #
+          # Prints:
+          # - type count
+          # - per-kind counts
+          # - total / unique STRUCT names
+          # - duplicate STRUCT records
+          # - top 40 duplicated STRUCT names
+          # - all IDs for our 8 target types
+          # ============================================================
 
           set +e
 
           python3 - \
             "$FINAL_BTF_CHECK" \
             "$MAX_BTF_TYPES" \
-            > "$BTF_SANITY_FILE" \
+            > "$BTF_DEEP_FILE" \
             2>&1 <<'PY'
+          import collections
           import struct
           import sys
           from pathlib import Path
@@ -3282,10 +3446,44 @@ jobs:
           path = Path(sys.argv[1])
           max_types = int(sys.argv[2])
 
+          targets = {
+              "xdp_buff",
+              "udp_sock",
+              "udp6_sock",
+              "tcp_timewait_sock",
+              "tcp_sock",
+              "tcp_request_sock",
+              "tcp6_sock",
+              "netlink_sock",
+          }
+
+          kind_names = {
+              0: "UNKN",
+              1: "INT",
+              2: "PTR",
+              3: "ARRAY",
+              4: "STRUCT",
+              5: "UNION",
+              6: "ENUM",
+              7: "FWD",
+              8: "TYPEDEF",
+              9: "VOLATILE",
+              10: "CONST",
+              11: "RESTRICT",
+              12: "FUNC",
+              13: "FUNC_PROTO",
+              14: "VAR",
+              15: "DATASEC",
+              16: "FLOAT",
+              17: "DECL_TAG",
+              18: "TYPE_TAG",
+              19: "ENUM64",
+          }
+
           data = path.read_bytes()
 
           if len(data) < 24:
-              print("BTF_SANITY_OK=NO")
+              print("BTF_ANALYSIS_OK=NO")
               print("ERROR=raw BTF too small")
               raise SystemExit(1)
 
@@ -3294,7 +3492,7 @@ jobs:
           elif struct.unpack_from(">H", data, 0)[0] == 0xEB9F:
               endian = ">"
           else:
-              print("BTF_SANITY_OK=NO")
+              print("BTF_ANALYSIS_OK=NO")
               print("ERROR=invalid BTF magic")
               raise SystemExit(1)
 
@@ -3315,36 +3513,52 @@ jobs:
           str_end = str_start + str_len
 
           if type_end > len(data) or str_end > len(data):
-              print("BTF_SANITY_OK=NO")
+              print("BTF_ANALYSIS_OK=NO")
               print("ERROR=BTF section out of bounds")
               raise SystemExit(1)
 
+          strings = data[str_start:str_end]
+
+          def get_string(offset):
+              if offset == 0:
+                  return ""
+              if offset < 0 or offset >= len(strings):
+                  return f"<bad-string-offset:{offset}>"
+              end = strings.find(b"\x00", offset)
+              if end < 0:
+                  end = len(strings)
+              return strings[offset:end].decode("utf-8", errors="replace")
+
           def extra_size(kind, vlen):
-              if kind == 1:          # INT
+              if kind == 1:
                   return 4
-              if kind == 3:          # ARRAY
+              if kind == 3:
                   return 12
-              if kind in (4, 5):     # STRUCT / UNION
+              if kind in (4, 5):
                   return 12 * vlen
-              if kind == 6:          # ENUM
+              if kind == 6:
                   return 8 * vlen
-              if kind == 13:         # FUNC_PROTO
+              if kind == 13:
                   return 8 * vlen
-              if kind == 14:         # VAR
+              if kind == 14:
                   return 4
-              if kind == 15:         # DATASEC
+              if kind == 15:
                   return 12 * vlen
-              if kind == 17:         # DECL_TAG
+              if kind == 17:
                   return 4
-              if kind == 19:         # ENUM64
+              if kind == 19:
                   return 12 * vlen
               if kind in (0, 2, 7, 8, 9, 10, 11, 12, 16, 18):
                   return 0
               raise ValueError(f"unsupported BTF kind {kind}")
 
+          kind_counts = collections.Counter()
+          struct_names = collections.Counter()
+          named_kind_counts = collections.Counter()
+          target_hits = collections.defaultdict(list)
+
           pos = type_start
           type_id = 1
-          kind_counts = {}
 
           try:
               while pos < type_end:
@@ -3357,74 +3571,215 @@ jobs:
 
                   vlen = info & 0xFFFF
                   kind = (info >> 24) & 0x1F
+                  kflag = (info >> 31) & 1
+                  name = get_string(name_off)
 
-                  kind_counts[kind] = kind_counts.get(kind, 0) + 1
+                  kind_counts[kind] += 1
+
+                  if name:
+                      named_kind_counts[(kind, name)] += 1
+
+                  if kind == 4 and name:
+                      struct_names[name] += 1
+
+                  if name in targets:
+                      target_hits[name].append(
+                          (
+                              type_id,
+                              kind,
+                              size_type,
+                              vlen,
+                              kflag,
+                          )
+                      )
 
                   pos += 12 + extra_size(kind, vlen)
                   type_id += 1
+
           except Exception as exc:
-              print("BTF_SANITY_OK=NO")
+              print("BTF_ANALYSIS_OK=NO")
               print(f"ERROR={exc}")
               raise SystemExit(1)
 
           if pos != type_end:
-              print("BTF_SANITY_OK=NO")
+              print("BTF_ANALYSIS_OK=NO")
               print(f"ERROR=parser end mismatch pos={pos} type_end={type_end}")
               raise SystemExit(1)
 
           type_count = type_id - 1
+          struct_count = kind_counts.get(4, 0)
+          unique_struct_names = len(struct_names)
+          duplicate_struct_records = sum(
+              count - 1
+              for count in struct_names.values()
+              if count > 1
+          )
 
+          print("=== BTF HEADER ===")
+          print(f"FILE={path}")
           print(f"magic=0x{magic:04x}")
           print(f"version={version}")
+          print(f"flags={flags}")
           print(f"hdr_len={hdr_len}")
           print(f"type_len={type_len}")
           print(f"str_len={str_len}")
           print(f"BTF_TYPE_COUNT={type_count}")
-          print(f"BTF_STRUCT_COUNT={kind_counts.get(4, 0)}")
+          print(f"BTF_STRUCT_COUNT={struct_count}")
+          print(f"BTF_UNIQUE_NAMED_STRUCTS={unique_struct_names}")
+          print(f"BTF_DUPLICATE_STRUCT_RECORDS={duplicate_struct_records}")
           print(f"MAX_BTF_TYPES={max_types}")
+          print("")
+
+          print("=== BTF KIND COUNTS ===")
+          for kind in sorted(kind_counts):
+              print(
+                  f"KIND {kind:2d} "
+                  f"{kind_names.get(kind, 'UNKNOWN'):10s} "
+                  f"COUNT={kind_counts[kind]}"
+              )
+          print("")
+
+          print("=== TOP 40 DUPLICATED STRUCT NAMES ===")
+          duplicates = [
+              (name, count)
+              for name, count in struct_names.items()
+              if count > 1
+          ]
+          duplicates.sort(key=lambda item: (-item[1], item[0]))
+
+          for name, count in duplicates[:40]:
+              print(f"STRUCT_DUP name={name} count={count}")
+          print("")
+
+          print("=== TARGET TYPES ===")
+          for name in sorted(targets):
+              hits = target_hits.get(name, [])
+              if not hits:
+                  print(f"TARGET_MISSING name={name}")
+                  continue
+
+              for tid, kind, size_type, vlen, kflag in hits:
+                  print(
+                      f"TARGET name={name} id={tid} "
+                      f"kind={kind_names.get(kind, kind)} "
+                      f"kind_id={kind} size_or_type={size_type} "
+                      f"vlen={vlen} kflag={kflag}"
+                  )
+          print("")
 
           if type_count > max_types:
-              print("BTF_SANITY_OK=NO")
-              print("ERROR=BTF type count is abnormally huge")
+              print("BTF_TYPE_LIMIT_EXCEEDED=YES")
+              print("BTF_ANALYSIS_OK=YES")
               raise SystemExit(42)
 
-          print("BTF_SANITY_OK=YES")
+          print("BTF_TYPE_LIMIT_EXCEEDED=NO")
+          print("BTF_ANALYSIS_OK=YES")
           PY
 
-          BTF_CHECK_STATUS=$?
+          BTF_ANALYSIS_STATUS=$?
 
           set -e
 
-          cat "$BTF_SANITY_FILE"
+          echo "=== Deep BTF analysis ==="
+          cat "$BTF_DEEP_FILE"
+
+          # ============================================================
+          # Compose one concise sanity report.
+          # ============================================================
 
           {
-            echo ""
             echo "PAHOLE_PATH=$PAHOLE_BIN"
             echo "PAHOLE_VERSION=$PAHOLE_VERSION"
             echo "IMAGE_BYTES=$IMAGE_SIZE"
             echo "IMAGE_MIB=$IMAGE_MIB"
+            echo "MAX_IMAGE_BYTES=$MAX_IMAGE_SIZE"
             echo "BTF_BYTES=$BTF_SIZE"
             echo "BTF_MIB=$BTF_MIB"
-          } >> "$BTF_SANITY_FILE"
+            echo "MAX_BTF_BYTES=$MAX_BTF_SIZE"
+            echo "MAX_BTF_TYPES=$MAX_BTF_TYPES"
 
-          if [ "$BTF_CHECK_STATUS" -ne 0 ]; then
+            if [ -f "$PAHOLE_RUNTIME_FILE" ]; then
+              echo ""
+              echo "=== PAHOLE RUNTIME ==="
+              cat "$PAHOLE_RUNTIME_FILE"
+            fi
 
-            echo "❌ BTF sanity check failed"
-            exit "$BTF_CHECK_STATUS"
+            echo ""
+            grep -E \
+              '^(BTF_TYPE_COUNT|BTF_STRUCT_COUNT|BTF_UNIQUE_NAMED_STRUCTS|BTF_DUPLICATE_STRUCT_RECORDS|BTF_TYPE_LIMIT_EXCEEDED|BTF_ANALYSIS_OK)=' \
+              "$BTF_DEEP_FILE" \
+              || true
+          } > "$BTF_SANITY_FILE"
 
+          # ============================================================
+          # FINAL gate — only now may the workflow fail.
+          # ============================================================
+
+          SANITY_STATUS=0
+
+          if [ "$BTF_ANALYSIS_STATUS" -ne 0 ]; then
+            SANITY_STATUS="$BTF_ANALYSIS_STATUS"
           fi
 
-          if ! grep -q '^BTF_SANITY_OK=YES$' \
-            "$BTF_SANITY_FILE"; then
+          if [ "$BTF_SIZE" -gt "$MAX_BTF_SIZE" ]; then
+            echo "BTF_SIZE_LIMIT_EXCEEDED=YES" >> "$BTF_SANITY_FILE"
 
-            echo "❌ BTF sanity marker missing"
-            exit 1
+            if [ "$SANITY_STATUS" -eq 0 ]; then
+              SANITY_STATUS=43
+            fi
+          else
+            echo "BTF_SIZE_LIMIT_EXCEEDED=NO" >> "$BTF_SANITY_FILE"
+          fi
+
+          if [ "$IMAGE_SIZE" -gt "$MAX_IMAGE_SIZE" ]; then
+            echo "IMAGE_SIZE_LIMIT_EXCEEDED=YES" >> "$BTF_SANITY_FILE"
+
+            if [ "$SANITY_STATUS" -eq 0 ]; then
+              SANITY_STATUS=44
+            fi
+          else
+            echo "IMAGE_SIZE_LIMIT_EXCEEDED=NO" >> "$BTF_SANITY_FILE"
+          fi
+
+          if [ "$SANITY_STATUS" -eq 0 ]; then
+            echo "BTF_SANITY_OK=YES" >> "$BTF_SANITY_FILE"
+          else
+            echo "BTF_SANITY_OK=NO" >> "$BTF_SANITY_FILE"
+          fi
+
+          echo "=== Final BTF / Image sanity report ==="
+          cat "$BTF_SANITY_FILE"
+
+          if [ "$SANITY_STATUS" -ne 0 ]; then
+
+            echo ""
+            echo "❌ Final BTF / Image sanity check failed"
+
+            case "$SANITY_STATUS" in
+              42)
+                echo "❌ BTF type count 超过 $MAX_BTF_TYPES"
+                ;;
+              43)
+                echo "❌ .BTF 大于 64 MiB"
+                ;;
+              44)
+                echo "❌ Image 大于 128 MiB"
+                ;;
+              *)
+                echo "❌ BTF parser / diagnostic failed: $SANITY_STATUS"
+                ;;
+            esac
+
+            echo "❌ 拒绝进入 AnyKernel3，避免再次刷入异常镜像"
+
+            exit "$SANITY_STATUS"
 
           fi
 
           echo "✅ Final BTF / Image sanity check passed"
 
           rm -f "$FINAL_BTF_CHECK"
+          rm -f "$BTF_OBJECT_RAW"
           rm -f "$IMAGE_SANITY_UNPACKED"
 
           echo ""
@@ -3687,6 +4042,33 @@ jobs:
           fi
 
           # ============================================================
+          # Runtime pahole diagnostic
+          # ============================================================
+
+          PAHOLE_RUNTIME_FILE="$GITHUB_WORKSPACE/pahole-runtime.txt"
+          BTF_DEEP_FILE="$GITHUB_WORKSPACE/btf-deep-analysis.txt"
+
+          if [ -f "$PAHOLE_RUNTIME_FILE" ]; then
+
+            echo ""
+            echo "================ pahole runtime ================="
+
+            cat "$PAHOLE_RUNTIME_FILE" \
+              || true
+
+          fi
+
+          if [ -f "$BTF_DEEP_FILE" ]; then
+
+            echo ""
+            echo "================ deep BTF analysis ================="
+
+            cat "$BTF_DEEP_FILE" \
+              || true
+
+          fi
+
+          # ============================================================
           # Final BTF / Image sanity report
           # ============================================================
 
@@ -3730,6 +4112,8 @@ jobs:
             btf-helper-dwarf.txt
 
             btf-sanity.txt
+            btf-deep-analysis.txt
+            pahole-runtime.txt
 
             vmlinux-before-btfids
             btf-bin-before-btfids.o

@@ -800,272 +800,295 @@ jobs:
         run: |
           kotlinc -script "$GITHUB_WORKSPACE/kernel_workspace/Action-Build/scripts/PatchFakePatches.kts" revert "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/common"
 
-      - name: Permanent SukiSU su PATH lookup source fix
+      - name: Permanent SukiSU su PATH lookup source fix v2
         run: |
           set -euo pipefail
 
           cd "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform"
 
           COMMON_DIR="$PWD/common"
-          KSU_DIR="$PWD/KernelSU"
           OPEN_C="$COMMON_DIR/fs/open.c"
-          STAT_C="$COMMON_DIR/fs/stat.c"
+          KSU_DIR="$PWD/KernelSU"
 
-          echo "=== Permanent SukiSU traditional su source fix ==="
+          echo "=== Permanent SukiSU traditional su PATH lookup source fix v2 ==="
           echo "KernelSU dir : $KSU_DIR"
           echo "open.c       : $OPEN_C"
-          echo "stat.c       : $STAT_C"
 
-          for f in "$OPEN_C" "$STAT_C"; do
-            if [ ! -f "$f" ]; then
-              echo "❌ required kernel source missing: $f"
-              exit 1
-            fi
-          done
+          if [ ! -f "$OPEN_C" ]; then
+            echo "❌ required kernel source missing: $OPEN_C"
+            exit 1
+          fi
 
           if [ ! -d "$KSU_DIR/kernel" ]; then
             echo "❌ KernelSU/kernel source directory is missing: $KSU_DIR/kernel"
             exit 1
           fi
 
-          echo "=== Locate real SukiSU sucompat handlers ==="
+          echo "=== Existing SukiSU sucompat symbols ==="
           grep -Rns --include='*.c' --include='*.h' \
             -E 'ksu_handle_(faccessat|stat|execveat_sucompat)' \
             "$KSU_DIR/kernel" \
-            | head -n 120 \
+            | head -n 160 \
             || true
 
-          python3 - "$KSU_DIR" "$OPEN_C" "$STAT_C" <<'PY'
+          python3 - "$OPEN_C" <<'PY'
           import re
           import sys
+          import textwrap
           from pathlib import Path
 
-          ksu_dir = Path(sys.argv[1])
-          open_c = Path(sys.argv[2])
-          stat_c = Path(sys.argv[3])
+          open_c = Path(sys.argv[1])
+          text = open_c.read_text()
 
-          marker = "KSU_SUCOMPAT_PATH_LOOKUP_HARDWIRE"
+          marker = "KSU_SUCOMPAT_PATH_LOOKUP_FALLBACK_V2"
+          helper_name = "ksu_sucompat_path_lookup_is_su"
+
+          # Runtime result on this device:
+          #
+          #   su -c id
+          #       -> shell reports "su: inaccessible or not found"
+          #
+          #   env /system/bin/su -c id
+          #       -> uid=0(root), u:r:ksu:s0
+          #
+          # and dmesg contains:
+          #
+          #   ksu_handle_execveat_sucompat: su found
+          #
+          # Therefore the execve/execveat sucompat path is already healthy.
+          # Only the shell's PATH probe is failing before execve is reached.
+          #
+          # This v2 fix deliberately does NOT redeclare or directly call
+          # ksu_handle_faccessat()/ksu_handle_stat(). The previous attempt
+          # showed that the patched 40879/SUSFS tree exposes a different
+          # compile-time wrapper prototype (struct filename **) than the
+          # userspace-path implementation ABI. Hard-coding that prototype
+          # caused fs/open.c to fail with conflicting types.
+          #
+          # Instead, keep normal VFS behavior first. Only when faccessat /
+          # access fails with ENOENT/EACCES for exactly /system/bin/su (or
+          # /system/xbin/su), report the PATH probe as accessible. The
+          # subsequent execve is still handled by SukiSU's existing and
+          # already-proven sucompat hook, which performs the real root policy.
+          #
+          # No alias, no /system modification, no extra su module.
+
+          if marker in text:
+              print("OK: v2 PATH fallback patch already present")
+              raise SystemExit(0)
 
           # ------------------------------------------------------------
-          # 1. Verify the exact SukiSU handlers that already exist.
-          #
-          # Runtime testing on this device proved:
-          #   execve("/system/bin/su") -> ksu_handle_execveat_sucompat -> root
-          # while shell PATH lookup could not see /system/bin/su.
-          #
-          # The current SukiSU kernel already contains handlers for both
-          # faccessat and stat.  This patch does NOT reimplement su/root.
-          # It only hard-wires those existing handlers into the real 5.10
-          # VFS entry paths so BTF/link-layout changes cannot make the
-          # inline hook miss them.
+          # Locate the real do_faccessat() in this Android 5.10 tree.
           # ------------------------------------------------------------
-          source_files = list((ksu_dir / "kernel").rglob("*.c"))
-          if not source_files:
-              print("ERROR: no KernelSU kernel C sources found")
+          func_re = re.compile(
+              r"static\s+(?:int|long)\s+do_faccessat\s*\(\s*"
+              r"int\s+dfd\s*,\s*"
+              r"const\s+char\s+__user\s*\*\s*filename\s*,\s*"
+              r"int\s+mode\s*,\s*"
+              r"int\s+flags\s*\)\s*\{",
+              re.S,
+          )
+          matches = list(func_re.finditer(text))
+          if len(matches) != 1:
+              print(
+                  "ERROR: expected exactly one do_faccessat(), "
+                  f"found {len(matches)}"
+              )
+              for n, line in enumerate(text.splitlines(), 1):
+                  if "do_faccessat" in line or "user_path_at_empty" in line:
+                      print(f"open.c:{n}: {line}")
               raise SystemExit(1)
 
-          source_blob = "\n".join(
-              p.read_text(errors="replace") for p in source_files
-          )
+          m = matches[0]
+          func_start = m.start()
+          body_start = m.end()
 
-          faccess_proto = re.compile(
-              r"\bint\s+ksu_handle_faccessat\s*\(\s*"
-              r"int\s*\*[^,]*,\s*"
-              r"const\s+char\s+__user\s*\*\*[^,]*,\s*"
-              r"int\s*\*[^,]*,\s*"
-              r"int\s*\*[^)]*\)",
-              re.S,
+          # Bound the function using the next syscall declaration.
+          next_syscall = re.search(
+              r"\n(?:COMPAT_)?SYSCALL_DEFINE",
+              text[body_start:],
           )
-          stat_proto = re.compile(
-              r"\bint\s+ksu_handle_stat\s*\(\s*"
-              r"int\s*\*[^,]*,\s*"
-              r"const\s+char\s+__user\s*\*\*[^,]*,\s*"
-              r"int\s*\*[^)]*\)",
-              re.S,
-          )
-          exec_proto = re.compile(
-              r"\bint\s+ksu_handle_execveat_sucompat\s*\(",
-              re.S,
-          )
+          if next_syscall:
+              func_end = body_start + next_syscall.start()
+          else:
+              func_end = min(len(text), body_start + 20000)
 
-          missing = []
-          if not faccess_proto.search(source_blob):
-              missing.append("ksu_handle_faccessat(int *, const char __user **, int *, int *)")
-          if not stat_proto.search(source_blob):
-              missing.append("ksu_handle_stat(int *, const char __user **, int *)")
-          if not exec_proto.search(source_blob):
-              missing.append("ksu_handle_execveat_sucompat")
+          func_text = text[func_start:func_end]
 
-          if missing:
-              print("ERROR: this SukiSU revision does not match the verified 40879 sucompat ABI")
-              for item in missing:
-                  print("  missing:", item)
-              print("Refusing to guess a different ABI.")
+          if not re.search(r"(?m)^[ \t]*out[ \t]*:", func_text):
+              print("ERROR: do_faccessat() has no 'out:' cleanup label")
+              print(func_text[:8000])
               raise SystemExit(1)
 
-          print("OK: verified SukiSU sucompat handler ABI")
-
           # ------------------------------------------------------------
-          # 2. Patch fs/open.c -> do_faccessat().
+          # Find:
           #
-          # Android /system/bin/sh resolves a bare `su` through PATH and
-          # checks candidates with access/faccessat before execve().
-          # If the normal SukiSU inline hook misses this syscall, the shell
-          # sees ENOENT and never reaches the working execve sucompat hook.
+          #   <result> = user_path_at_empty(... filename ...);
           # ------------------------------------------------------------
-          open_text = open_c.read_text()
+          lookup_re = re.compile(
+              r"(?P<lhs>\b[A-Za-z_][A-Za-z0-9_]*\b)"
+              r"[ \t]*=[ \t]*user_path_at_empty\s*\(",
+              re.S,
+          )
+          lookup_matches = list(lookup_re.finditer(func_text))
+          if len(lookup_matches) != 1:
+              print(
+                  "ERROR: expected exactly one user_path_at_empty() "
+                  f"assignment in do_faccessat(), found {len(lookup_matches)}"
+              )
+              print(func_text[:10000])
+              raise SystemExit(1)
 
-          if marker not in open_text:
-              open_pattern = re.compile(
-                  r"(?P<head>"
-                  r"static\s+(?:int|long)\s+do_faccessat\s*\(\s*"
-                  r"int\s+dfd\s*,\s*"
-                  r"const\s+char\s+__user\s*\*\s*filename\s*,\s*"
-                  r"int\s+mode\s*,\s*"
-                  r"int\s+flags\s*\)\s*\{"
-                  r")",
-                  re.S,
-              )
-              matches = list(open_pattern.finditer(open_text))
-              if len(matches) != 1:
-                  print(f"ERROR: expected exactly one do_faccessat(), found {len(matches)}")
-                  for n, line in enumerate(open_text.splitlines(), 1):
-                      if "do_faccessat" in line or "faccessat" in line:
-                          print(f"open.c:{n}: {line}")
-                  raise SystemExit(1)
+          lm = lookup_matches[0]
+          result_var = lm.group("lhs")
+          lookup_abs = func_start + lm.start()
 
-              declaration = (
-                  "#ifdef CONFIG_KSU\n"
-                  "extern int ksu_handle_faccessat(int *dfd,\n"
-                  "                                const char __user **filename_user,\n"
-                  "                                int *mode, int *flags);\n"
-                  "#endif\n\n"
-              )
+          semicolon = text.find(";", lookup_abs)
+          if semicolon < 0 or semicolon >= func_end:
+              print("ERROR: cannot find end of user_path_at_empty() statement")
+              raise SystemExit(1)
 
-              m = matches[0]
-              body = m.group("head") + (
-                  "\n#ifdef CONFIG_KSU\n"
-                  "\t/* " + marker + "\n"
-                  "\t * Directly enter SukiSU's existing su_compat access handler.\n"
-                  "\t * The handler itself keeps SukiSU feature/chroot policy.\n"
-                  "\t */\n"
-                  "\tksu_handle_faccessat(&dfd, &filename, &mode, &flags);\n"
-                  "#endif"
-              )
-              open_text = (
-                  open_text[:m.start()]
-                  + declaration
-                  + body
-                  + open_text[m.end():]
-              )
-              open_c.write_text(open_text)
-              print("OK: patched fs/open.c do_faccessat")
-          else:
-              print("OK: fs/open.c patch already present")
+          lookup_stmt = text[lookup_abs:semicolon + 1]
+          if "filename" not in lookup_stmt:
+              print("ERROR: lookup statement does not use do_faccessat filename")
+              print(lookup_stmt)
+              raise SystemExit(1)
 
           # ------------------------------------------------------------
-          # 3. Patch fs/stat.c -> vfs_statx().
-          #
-          # stat/newfstatat/statx all converge here on this 5.10 tree.
-          # Calling SukiSU's existing ksu_handle_stat() here restores the
-          # virtual /system/bin/su visibility for stat-style lookups too.
+          # File-scope helper. strncpy_from_user() is used only to compare
+          # the pathname; no userspace pointer is retained.
           # ------------------------------------------------------------
-          stat_text = stat_c.read_text()
+          helper = r'''
+          #ifdef CONFIG_KSU
+          #include <linux/uaccess.h>
+          #include <linux/string.h>
 
-          if marker not in stat_text:
-              stat_pattern = re.compile(
-                  r"(?P<head>"
-                  r"\bint\s+vfs_statx\s*\(\s*"
-                  r"int\s+dfd\s*,\s*"
-                  r"const\s+char\s+__user\s*\*\s*filename\s*,\s*"
-                  r"int\s+flags\s*,"
-                  r"[^;{}]*?\)\s*\{"
-                  r")",
-                  re.S,
-              )
-              matches = list(stat_pattern.finditer(stat_text))
-              if len(matches) != 1:
-                  print(f"ERROR: expected exactly one vfs_statx(), found {len(matches)}")
-                  for n, line in enumerate(stat_text.splitlines(), 1):
-                      if "vfs_statx" in line or "SYSCALL_DEFINE" in line and "stat" in line:
-                          print(f"stat.c:{n}: {line}")
-                  raise SystemExit(1)
+          /*
+           * KSU_SUCOMPAT_PATH_LOOKUP_FALLBACK_V2
+           *
+           * Make only the traditional su pathname visible to access/faccessat
+           * after the ordinary VFS lookup has failed. Root authorization is
+           * NOT done here; SukiSU's existing execve sucompat handler remains
+           * authoritative.
+           */
+          static bool ksu_sucompat_path_lookup_is_su(
+              const char __user *filename)
+          {
+              static const char system_bin_su[] = "/system/bin/su";
+              static const char system_xbin_su[] = "/system/xbin/su";
+              char path[32];
+              long len;
 
-              declaration = (
-                  "#ifdef CONFIG_KSU\n"
-                  "extern int ksu_handle_stat(int *dfd,\n"
-                  "                            const char __user **filename_user,\n"
-                  "                            int *flags);\n"
-                  "#endif\n\n"
-              )
+              if (!filename)
+                  return false;
 
-              m = matches[0]
-              body = m.group("head") + (
-                  "\n#ifdef CONFIG_KSU\n"
-                  "\t/* " + marker + "\n"
-                  "\t * Directly enter SukiSU's existing su_compat stat handler.\n"
-                  "\t */\n"
-                  "\tksu_handle_stat(&dfd, &filename, &flags);\n"
-                  "#endif"
-              )
-              stat_text = (
-                  stat_text[:m.start()]
-                  + declaration
-                  + body
-                  + stat_text[m.end():]
-              )
-              stat_c.write_text(stat_text)
-              print("OK: patched fs/stat.c vfs_statx")
-          else:
-              print("OK: fs/stat.c patch already present")
+              len = strncpy_from_user(path, filename, sizeof(path));
+              if (len < 0 || len >= (long)sizeof(path))
+                  return false;
+
+              if (len == (long)sizeof(system_bin_su) - 1 &&
+                  !memcmp(path, system_bin_su, sizeof(system_bin_su)))
+                  return true;
+
+              if (len == (long)sizeof(system_xbin_su) - 1 &&
+                  !memcmp(path, system_xbin_su, sizeof(system_xbin_su)))
+                  return true;
+
+              return false;
+          }
+          #endif
+
+          '''
+          helper = textwrap.dedent(helper)
+
+          # Insert helper immediately before do_faccessat() at file scope.
+          text = text[:func_start] + helper + text[func_start:]
+
+          # Recompute lookup semicolon after helper insertion.
+          semicolon += len(helper)
+
+          fallback = f'''
+          #ifdef CONFIG_KSU
+          \t/*
+          \t * {marker}
+          \t *
+          \t * Normal VFS lookup runs first. Only the missing/inaccessible
+          \t * traditional su path gets a successful PATH probe. execve is
+          \t * still handled by SukiSU itself.
+          \t */
+          \tif (({result_var} == -ENOENT || {result_var} == -EACCES) &&
+          \t    {helper_name}(filename)) {{
+          \t\t{result_var} = 0;
+          \t\tgoto out;
+          \t}}
+          #endif
+          '''
+          fallback = textwrap.dedent(fallback)
+
+          text = text[:semicolon + 1] + fallback + text[semicolon + 1:]
+          open_c.write_text(text)
 
           # ------------------------------------------------------------
-          # 4. Strict verification.  We intentionally fail the build if
-          # the expected source patch is not exactly present.
+          # Strict source verification.
           # ------------------------------------------------------------
-          open_text = open_c.read_text()
-          stat_text = stat_c.read_text()
+          final = open_c.read_text()
 
-          checks = [
-              (open_c, open_text.count(marker) == 1,
-               "open.c marker count must be 1"),
-              (open_c, open_text.count("ksu_handle_faccessat(&dfd, &filename, &mode, &flags);") == 1,
-               "open.c direct faccessat call must be 1"),
-              (stat_c, stat_text.count(marker) == 1,
-               "stat.c marker count must be 1"),
-              (stat_c, stat_text.count("ksu_handle_stat(&dfd, &filename, &flags);") == 1,
-               "stat.c direct stat call must be 1"),
+          required = [
+              marker,
+              "static bool ksu_sucompat_path_lookup_is_su(",
+              '"/system/bin/su"',
+              '"/system/xbin/su"',
+              "strncpy_from_user(",
+              "== -ENOENT",
+              "== -EACCES",
+              "goto out;",
           ]
-          failed = False
-          for path, ok, msg in checks:
-              if ok:
-                  print("OK:", msg)
-              else:
-                  print("ERROR:", path, msg)
-                  failed = True
-          if failed:
+
+          for item in required:
+              if item not in final:
+                  print("ERROR: patched open.c missing:", item)
+                  raise SystemExit(1)
+
+          if final.count(marker) != 2:
+              print(
+                  "ERROR: unexpected marker count:",
+                  final.count(marker),
+              )
               raise SystemExit(1)
 
-          print("OK: permanent SukiSU PATH/stat source fix verified")
+          if "extern int ksu_handle_faccessat" in final:
+              print(
+                  "ERROR: stale direct ksu_handle_faccessat extern "
+                  "declaration unexpectedly present"
+              )
+              raise SystemExit(1)
+
+          print("OK: v2 SukiSU traditional su PATH fallback patched")
+          print("OK: no direct ksu_handle_faccessat/stat ABI dependency")
           PY
 
-          echo "=== Patched fs/open.c ==="
-          grep -n -B 12 -A 20 \
-            'KSU_SUCOMPAT_PATH_LOOKUP_HARDWIRE' \
-            "$OPEN_C"
+          echo "=== Patched fs/open.c helper ==="
+          grep -n -B 8 -A 45 \
+            'KSU_SUCOMPAT_PATH_LOOKUP_FALLBACK_V2' \
+            "$OPEN_C" \
+            | head -n 130
 
-          echo "=== Patched fs/stat.c ==="
-          grep -n -B 12 -A 20 \
-            'KSU_SUCOMPAT_PATH_LOOKUP_HARDWIRE' \
-            "$STAT_C"
+          echo "=== do_faccessat lookup context ==="
+          grep -n -B 18 -A 35 \
+            'user_path_at_empty' \
+            "$OPEN_C" \
+            | head -n 150
 
-          echo "=== Verify existing SukiSU implementation is still present ==="
-          grep -Rns --include='*.c' \
-            -E 'ksu_handle_(faccessat|stat|execveat_sucompat)' \
-            "$KSU_DIR/kernel" \
-            | head -n 120
+          echo "=== Confirm no stale direct handler redeclaration ==="
+          if grep -n \
+            'extern int ksu_handle_faccessat' \
+            "$OPEN_C"; then
+            echo "❌ stale direct handler redeclaration found"
+            exit 1
+          fi
 
-          echo "✅ SukiSU traditional su PATH lookup is hard-wired at source level"
+          echo "✅ SukiSU traditional su PATH source fix v2 applied"
+          echo "✅ Direct 'su' will reach the already-working execve sucompat hook"
           echo "✅ No alias, no /system modification, no extra su module"
           echo "✅ BTF/pahole/resolve_btfids/LTO configuration untouched"
 

@@ -2866,6 +2866,53 @@ jobs:
 
           echo "LOG=$BUILD_LOG"
 
+          # ============================================================
+          # Force pahole as a GNU make command-line override
+          #
+          # IMPORTANT:
+          #
+          # Passing PAHOLE=/usr/local/bin/pahole only as a normal
+          # environment variable is NOT enough here. This 5.10 tree
+          # assigns PAHOLE=pahole inside Kbuild, which overrides the
+          # ordinary environment value.
+          #
+          # MAKEFLAGS variable assignments are treated by GNU make as
+          # command-line overrides, so the internal make and sub-makes
+          # keep the absolute v1.27 path.
+          # ============================================================
+
+          if [ -n "${MAKEFLAGS:-}" ]; then
+
+            export MAKEFLAGS="$MAKEFLAGS PAHOLE=$PAHOLE_BIN"
+
+          else
+
+            export MAKEFLAGS="PAHOLE=$PAHOLE_BIN"
+
+          fi
+
+          echo "=== GNU make pahole override ==="
+
+          echo "MAKEFLAGS=$MAKEFLAGS"
+
+          case " $MAKEFLAGS " in
+
+            *" PAHOLE=$PAHOLE_BIN "*)
+
+              echo "✅ MAKEFLAGS contains absolute pahole override"
+
+              ;;
+
+            *)
+
+              echo "❌ MAKEFLAGS pahole override missing"
+
+              exit 1
+
+              ;;
+
+          esac
+
           set +e
 
           if [ -f ./kernel_platform/build_with_bazel.py ]; then
@@ -3690,6 +3737,7 @@ jobs:
           {
             echo "PAHOLE_PATH=$PAHOLE_BIN"
             echo "PAHOLE_VERSION=$PAHOLE_VERSION"
+            echo "MAKEFLAGS=${MAKEFLAGS:-<unset>}"
             echo "IMAGE_BYTES=$IMAGE_SIZE"
             echo "IMAGE_MIB=$IMAGE_MIB"
             echo "MAX_IMAGE_BYTES=$MAX_IMAGE_SIZE"

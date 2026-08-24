@@ -800,7 +800,7 @@ jobs:
         run: |
           kotlinc -script "$GITHUB_WORKSPACE/kernel_workspace/Action-Build/scripts/PatchFakePatches.kts" revert "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/common"
 
-      - name: Permanent SukiSU traditional su shell-path fix v3
+      - name: Permanent SukiSU traditional su shell-path fix v4
         run: |
           set -euo pipefail
 
@@ -810,11 +810,11 @@ jobs:
           OPEN_C="$COMMON_DIR/fs/open.c"
           STAT_C="$COMMON_DIR/fs/stat.c"
           KSU_DIR="$PWD/KernelSU"
-          REPORT="$GITHUB_WORKSPACE/sucompat-shell-path-fix-v3.txt"
+          REPORT="$GITHUB_WORKSPACE/sucompat-shell-path-fix-v4.txt"
 
           rm -f "$REPORT"
 
-          echo "=== Permanent SukiSU traditional su shell-path fix v3 ===" | tee "$REPORT"
+          echo "=== Permanent SukiSU traditional su shell-path fix v4 ===" | tee "$REPORT"
           echo "KernelSU dir : $KSU_DIR" | tee -a "$REPORT"
           echo "open.c       : $OPEN_C" | tee -a "$REPORT"
           echo "stat.c       : $STAT_C" | tee -a "$REPORT"
@@ -841,7 +841,7 @@ jobs:
             || true
 
           echo "" | tee -a "$REPORT"
-          echo "=== Existing VFS sucompat call sites before v3 ===" | tee -a "$REPORT"
+          echo "=== Existing VFS sucompat call sites before v4 ===" | tee -a "$REPORT"
           grep -n -B 12 -A 18 \
             -E 'ksu_handle_(faccessat|stat)|susfs_is_current_proc_no_su|__ksu_is_allow_uid_for_current' \
             "$OPEN_C" "$STAT_C" \
@@ -851,13 +851,14 @@ jobs:
 
           python3 - "$OPEN_C" "$STAT_C" "$REPORT" <<'PY'
           from pathlib import Path
+          import re
           import sys
 
           open_path = Path(sys.argv[1])
           stat_path = Path(sys.argv[2])
           report_path = Path(sys.argv[3])
 
-          MARKER = "KSU_SUCOMPAT_SHELL_UID_PATH_FIX_V3"
+          MARKER = "KSU_SUCOMPAT_SHELL_UID_PATH_FIX_V4"
           ALLOW_EXPR = "__ksu_is_allow_uid_for_current(current_uid().val)"
           SHELL_UID = 2000
 
@@ -872,7 +873,7 @@ jobs:
           def patch_file(path: Path, handlers, require_allow_patch=False):
               text = path.read_text(encoding="utf-8")
               if MARKER in text:
-                  report(f"{path}: v3 marker already present; verifying only")
+                  report(f"{path}: v4 marker already present; verifying only")
                   return 0, 0
 
               lines = text.splitlines(keepends=True)
@@ -967,7 +968,7 @@ jobs:
           )
 
           # Strict post-patch verification.  open.c is authoritative for the
-          # shell's access/faccessat PATH probe and must contain the v3 change.
+          # shell's access/faccessat PATH probe and must contain the v4 change.
           open_text = open_path.read_text(encoding="utf-8")
           stat_text = stat_path.read_text(encoding="utf-8")
 
@@ -978,24 +979,76 @@ jobs:
           ]
           for item in required_open:
               if item not in open_text:
-                  report(f"ERROR: open.c missing required v3 token: {item}")
+                  report(f"ERROR: open.c missing required v4 token: {item}")
                   raise SystemExit(1)
 
-          # Do not tolerate stale v1/v2 direct-handler hacks in the successful
-          # base workflow.  v3 intentionally changes only existing SUSFS call
-          # gating and introduces no handler declaration/ABI dependency.
-          forbidden = [
+          # Do not tolerate stale v1/v2 experiments, but DO keep the legitimate
+          # SUSFS inline-hook declarations already present in this tree:
+          #
+          #   extern int ksu_handle_faccessat(... struct filename ** ...);
+          #   extern int ksu_handle_stat(... struct filename ** ...);
+          #
+          # v3 falsely rejected the first declaration merely because its text
+          # started with "extern int ksu_handle_faccessat".  The 13:08 build
+          # log proved that declaration is part of the original SUSFS patch,
+          # not residue from our old direct-handler experiment.
+          forbidden_markers = [
               "KSU_SUCOMPAT_PATH_LOOKUP_HARDWIRE",
               "KSU_SUCOMPAT_PATH_LOOKUP_FALLBACK_V2",
-              "extern int ksu_handle_faccessat",
               "ksu_sucompat_path_lookup_is_su",
           ]
-          for item in forbidden:
+          for item in forbidden_markers:
               if item in open_text or item in stat_text:
                   report(f"ERROR: stale experimental sucompat patch found: {item}")
                   raise SystemExit(1)
 
-          report("SUCOMPAT_SHELL_PATH_FIX_V3=YES")
+          # Reject only the ACTUAL bad v1 ABI: a direct userspace-pointer
+          # declaration injected into fs/open.c or fs/stat.c.  The valid SUSFS
+          # inline-hook ABI uses struct filename ** and must be accepted.
+          bad_open_decl = re.compile(
+              r"extern\s+int\s+ksu_handle_faccessat\s*\(\s*"
+              r"int\s*\*\s*dfd\s*,\s*"
+              r"const\s+char\s+__user\s*\*\s*\*",
+              re.S,
+          )
+          bad_stat_decl = re.compile(
+              r"extern\s+int\s+ksu_handle_stat\s*\(\s*"
+              r"int\s*\*\s*dfd\s*,\s*"
+              r"const\s+char\s+__user\s*\*\s*\*",
+              re.S,
+          )
+          if bad_open_decl.search(open_text):
+              report("ERROR: stale v1 const-char ksu_handle_faccessat declaration found")
+              raise SystemExit(1)
+          if bad_stat_decl.search(stat_text):
+              report("ERROR: stale v1 const-char ksu_handle_stat declaration found")
+              raise SystemExit(1)
+
+          # Also verify that this SUSFS inline-hook tree still has the expected
+          # struct-filename bridge declarations.  This is the ABI actually shown
+          # by the current build log and used by the existing call sites.
+          good_open_decl = re.compile(
+              r"extern\s+int\s+ksu_handle_faccessat\s*\(\s*"
+              r"int\s*\*\s*dfd\s*,\s*"
+              r"struct\s+filename\s*\*\s*\*",
+              re.S,
+          )
+          good_stat_decl = re.compile(
+              r"extern\s+int\s+ksu_handle_stat\s*\(\s*"
+              r"int\s*\*\s*dfd\s*,\s*"
+              r"struct\s+filename\s*\*\s*\*",
+              re.S,
+          )
+          if not good_open_decl.search(open_text):
+              report("ERROR: expected SUSFS struct-filename faccessat declaration missing")
+              raise SystemExit(1)
+          if not good_stat_decl.search(stat_text):
+              report("ERROR: expected SUSFS struct-filename stat declaration missing")
+              raise SystemExit(1)
+
+          report("SUSFS_STRUCT_FILENAME_ABI=YES")
+
+          report("SUCOMPAT_SHELL_PATH_FIX_V4=YES")
           report(f"OPEN_ALLOW_PATCHES={open_allow}")
           report(f"OPEN_NOSU_PATCHES={open_nosu}")
           report(f"STAT_ALLOW_PATCHES={stat_allow}")
@@ -1003,20 +1056,20 @@ jobs:
           PY
 
           echo "" | tee -a "$REPORT"
-          echo "=== VFS sucompat call sites after v3 ===" | tee -a "$REPORT"
+          echo "=== VFS sucompat call sites after v4 ===" | tee -a "$REPORT"
           grep -n -B 14 -A 22 \
-            -E 'KSU_SUCOMPAT_SHELL_UID_PATH_FIX_V3|ksu_handle_(faccessat|stat)|susfs_is_current_proc_no_su|__ksu_is_allow_uid_for_current|current_uid\(\)\.val == 2000' \
+            -E 'KSU_SUCOMPAT_SHELL_UID_PATH_FIX_V4|ksu_handle_(faccessat|stat)|susfs_is_current_proc_no_su|__ksu_is_allow_uid_for_current|current_uid\(\)\.val == 2000' \
             "$OPEN_C" "$STAT_C" \
             | head -n 420 \
             | tee -a "$REPORT" \
             || true
 
-          if ! grep -q '^SUCOMPAT_SHELL_PATH_FIX_V3=YES$' "$REPORT"; then
-            echo "❌ SukiSU traditional su shell-path fix v3 verification failed"
+          if ! grep -q '^SUCOMPAT_SHELL_PATH_FIX_V4=YES$' "$REPORT"; then
+            echo "❌ SukiSU traditional su shell-path fix v4 verification failed"
             exit 1
           fi
 
-          echo "✅ SukiSU traditional su shell-path fix v3 applied"
+          echo "✅ SukiSU traditional su shell-path fix v4 applied"
           echo "✅ Reuses existing SUSFS/SukiSU faccessat/stat handlers"
           echo "✅ Adds only Android shell uid 2000 to PATH-probe compatibility"
           echo "✅ No handler prototype redeclaration"
@@ -4393,7 +4446,7 @@ jobs:
             btf-sanity.txt
             btf-deep-analysis.txt
             pahole-runtime.txt
-            sucompat-shell-path-fix-v3.txt
+            sucompat-shell-path-fix-v4.txt
 
             vmlinux-before-btfids
             btf-bin-before-btfids.o

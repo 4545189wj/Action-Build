@@ -4384,6 +4384,70 @@ jobs:
           echo "✅ KPM/KPN Image size sanity passed"
           ls -lh "${GITHUB_WORKSPACE}/AnyKernel3/Image"
 
+      - name: Build SukiSU Traditional SU Path Fix Module
+        run: |
+          set -e
+
+          # ============================================================
+          # SukiSU traditional su PATH visibility fix
+          #
+          # Device-side diagnosis proved:
+          #   1. /system/bin/su does not exist for stat/access/PATH lookup.
+          #   2. Direct exec of /system/bin/su is still intercepted by
+          #      SukiSU su_compat and successfully becomes uid=0.
+          #
+          # Therefore we only provide a harmless, executable placeholder
+          # at /system/bin/su through KernelSU's systemless module layer.
+          # The actual root transition is still handled by SukiSU's
+          # ksu_handle_execveat_sucompat hook; this placeholder does NOT
+          # implement root by itself.
+          # ============================================================
+
+          MOD_DIR="$GITHUB_WORKSPACE/SukiSU-su-path-fix"
+          MOD_ZIP="$GITHUB_WORKSPACE/SukiSU-su-path-fix.zip"
+
+          rm -rf "$MOD_DIR" "$MOD_ZIP"
+          mkdir -p "$MOD_DIR/system/bin"
+
+          cat > "$MOD_DIR/module.prop" <<'EOF'
+          id=sukisu_su_path_fix
+          name=SukiSU Traditional SU Path Fix
+          version=1.0
+          versionCode=1
+          author=local
+          description=Restore /system/bin/su visibility for shell PATH lookup while keeping SukiSU su_compat as the real root implementation.
+          EOF
+
+          # Do NOT point this script back to /system/bin/su, otherwise a
+          # failed su_compat interception would recurse forever.
+          # Under the working SukiSU hook this file is never executed;
+          # execve/execveat is intercepted first and redirected by SukiSU.
+          cat > "$MOD_DIR/system/bin/su" <<'EOF'
+          #!/system/bin/sh
+          exit 127
+          EOF
+
+          chmod 0755 "$MOD_DIR/system/bin/su"
+          chmod 0644 "$MOD_DIR/module.prop"
+
+          # KSU/Magisk-style systemless module. KernelSU/SukiSU Manager can
+          # install this ZIP directly; at every boot /system/bin/su becomes
+          # visible without modifying the real read-only /system partition.
+          (
+            cd "$MOD_DIR"
+            zip -r9 "$MOD_ZIP" .
+          )
+
+          echo "=== SukiSU su path fix module ==="
+          unzip -l "$MOD_ZIP"
+          sha256sum "$MOD_ZIP"
+
+          # Put a copy inside the AnyKernel artifact for convenience.
+          cp "$MOD_ZIP" "$GITHUB_WORKSPACE/AnyKernel3/"
+
+          echo "✅ SukiSU-su-path-fix.zip generated"
+          echo "✅ This is a persistent systemless fix; no alias is used"
+
       - name: Download Latest SUSFS Module from CI
         if: ${{ github.event.inputs.SUSFS_CI == 'CI' && github.event.inputs.SUSFS_META != '-1' }}
         continue-on-error: true

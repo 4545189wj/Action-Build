@@ -1392,7 +1392,7 @@ jobs:
           make -j"$(nproc --all)" O=out "${MAKE_ARGS[@]}"
           ccache -s
 
-      - name: Install newer pahole
+      - name: Install compatible pahole v1.24
         run: |
           set -e
 
@@ -1408,7 +1408,7 @@ jobs:
           rm -rf /tmp/pahole
 
           git clone https://git.kernel.org/pub/scm/devel/pahole/pahole.git \
-            --branch v1.27 \
+            --branch v1.24 \
             --depth=1 \
             --recurse-submodules \
             /tmp/pahole
@@ -1431,8 +1431,8 @@ jobs:
           echo "$PAHOLE_VERSION"
 
           case "$PAHOLE_VERSION" in
-            *v1.27*)
-              echo "✅ pahole v1.27 ready"
+            *v1.24*)
+              echo "✅ pahole v1.24 ready"
               ;;
             *)
               echo "❌ unexpected pahole version: $PAHOLE_VERSION"
@@ -1534,7 +1534,7 @@ jobs:
           # pahole
           #
           # IMPORTANT:
-          # 这里强制使用前一步安装的 /usr/local/bin/pahole v1.27。
+          # 这里强制使用前一步安装的 /usr/local/bin/pahole v1.24。
           # 不再优先使用 Android prebuilt pahole v1.19。
           #
           # BTF 保持开启；本步骤只切换 BTF encoder/dedup 工具。
@@ -1559,11 +1559,11 @@ jobs:
           echo "$PAHOLE_VERSION"
 
           case "$PAHOLE_VERSION" in
-            *v1.27*)
-              echo "✅ confirmed pahole v1.27"
+            *v1.24*)
+              echo "✅ confirmed pahole v1.24"
               ;;
             *)
-              echo "❌ 不是预期的 pahole v1.27: $PAHOLE_VERSION"
+              echo "❌ 不是预期的 pahole v1.24: $PAHOLE_VERSION"
               exit 1
               ;;
           esac
@@ -2591,7 +2591,15 @@ jobs:
           ]
 
           after = [
+              indent + 'pahole_status=$?\n',
               indent + 'set +x\n',
+              indent + 'if [ "$pahole_status" -ne 0 ]; then\n',
+              indent + '    echo "BTFDIAG PAHOLE_EXIT_STATUS=$pahole_status" >&2\n',
+              indent + '    if [ -n "${GITHUB_WORKSPACE:-}" ]; then\n',
+              indent + '        echo "PAHOLE_EXIT_STATUS=$pahole_status" >> "${GITHUB_WORKSPACE}/pahole-runtime.txt"\n',
+              indent + '    fi\n',
+              indent + '    return "$pahole_status"\n',
+              indent + 'fi\n',
           ]
 
           lines[start:start] = before
@@ -2878,7 +2886,7 @@ jobs:
           #
           # MAKEFLAGS variable assignments are treated by GNU make as
           # command-line overrides, so the internal make and sub-makes
-          # keep the absolute v1.27 path.
+          # keep the absolute v1.24 path.
           # ============================================================
 
           if [ -n "${MAKEFLAGS:-}" ]; then

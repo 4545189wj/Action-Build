@@ -800,7 +800,7 @@ jobs:
         run: |
           kotlinc -script "$GITHUB_WORKSPACE/kernel_workspace/Action-Build/scripts/PatchFakePatches.kts" revert "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/common"
 
-      - name: Permanent SukiSU traditional su newfstatat fix v6
+      - name: Permanent SukiSU traditional su filename ABI fix v7
         run: |
           set -euo pipefail
 
@@ -812,11 +812,11 @@ jobs:
           KSU_DIR="$PWD/KernelSU"
           SUCOMPAT_H="$KSU_DIR/kernel/feature/sucompat.h"
           SUCOMPAT_C="$KSU_DIR/kernel/feature/sucompat.c"
-          REPORT="$GITHUB_WORKSPACE/sucompat-newfstatat-fix-v6.txt"
+          REPORT="$GITHUB_WORKSPACE/sucompat-newfstatat-fix-v7.txt"
 
           rm -f "$REPORT"
 
-          echo "=== Permanent SukiSU traditional su newfstatat fix v6 ===" | tee "$REPORT"
+          echo "=== Permanent SukiSU traditional su filename ABI fix v7 ===" | tee "$REPORT"
           echo "KernelSU dir : $KSU_DIR" | tee -a "$REPORT"
           echo "open.c       : $OPEN_C" | tee -a "$REPORT"
           echo "stat.c       : $STAT_C" | tee -a "$REPORT"
@@ -831,11 +831,11 @@ jobs:
           done
 
           echo "" | tee -a "$REPORT"
-          echo "=== SukiSU sucompat declarations before v5 ===" | tee -a "$REPORT"
+          echo "=== SukiSU/VFS sucompat symbols before v7 ===" | tee -a "$REPORT"
           grep -n -E \
-            'ksu_su_compat_enabled|ksu_handle_(faccessat|stat|execveat_sucompat)' \
+            'ksu_su_compat_enabled|ksu_handle_(faccessat|stat|execveat_sucompat)|susfs_is_current_proc_no_su' \
             "$SUCOMPAT_H" "$SUCOMPAT_C" "$OPEN_C" "$STAT_C" \
-            | head -n 320 \
+            | head -n 360 \
             | tee -a "$REPORT" \
             || true
 
@@ -850,7 +850,8 @@ jobs:
           su_c = Path(sys.argv[4])
           report_path = Path(sys.argv[5])
 
-          MARKER = "KSU_SUCOMPAT_NEWFSTATAT_SHELL_FIX_V6"
+          MARKER = "KSU_SUCOMPAT_FILENAME_ABI_FIX_V7"
+          HELPER = "ksu_handle_stat_filename"
 
           def report(msg: str) -> None:
               print(msg)
@@ -862,73 +863,99 @@ jobs:
           h_text = su_h.read_text(encoding="utf-8")
           c_text = su_c.read_text(encoding="utf-8")
 
-          # ------------------------------------------------------------
-          # Proven mismatch in this exact SukiSU/SUSFS combination:
-          #
-          # SukiSU 4.1.3 defines:
-          #   bool ksu_su_compat_enabled
-          #   ksu_handle_faccessat(... const char __user ** ...)
-          #   ksu_handle_stat(... struct filename ** ...)
-          #
-          # SUSFS 5.10 inline patch expects:
-          #   struct static_key_true ksu_su_compat_enabled
-          #   ksu_handle_faccessat(... struct filename ** ...)
-          #
-          # execve sucompat works because it stays inside SukiSU and uses
-          # the real bool + struct filename ABI.  PATH lookup fails in
-          # fs/open.c/fs/stat.c because these injected call sites use the
-          # stale static-key ABI, and open.c also calls the wrong faccessat
-          # prototype.
-          # ------------------------------------------------------------
+          # Runtime proof behind v7:
+          # vfs_statx passes &fname (struct filename **), while the running
+          # 5.10 callee treats *x1 as a userspace char pointer and reaches
+          # strncpy_from_user(..., fname, 16), which faults.  Avoid the
+          # version-dependent overloaded ksu_handle_stat symbol completely.
 
           if not re.search(r"extern\s+bool\s+ksu_su_compat_enabled\s*;", h_text):
               report("ERROR: sucompat.h does not declare bool ksu_su_compat_enabled")
               raise SystemExit(1)
-
           if not re.search(r"\bbool\s+ksu_su_compat_enabled\b", c_text):
               report("ERROR: sucompat.c does not define bool ksu_su_compat_enabled")
               raise SystemExit(1)
 
-          if not re.search(
-              r"ksu_handle_faccessat\s*\(\s*int\s*\*[^,]*,\s*"
-              r"const\s+char\s+__user\s*\*\s*\*",
-              h_text + "\n" + c_text,
-              re.S,
-          ):
-              report("ERROR: expected const-char userspace faccessat ABI not found in SukiSU")
-              raise SystemExit(1)
-
-          if not re.search(
-              r"ksu_handle_stat\s*\(\s*int\s*\*[^,]*,\s*"
-              r"struct\s+filename\s*\*\s*\*",
-              h_text + "\n" + c_text,
-              re.S,
-          ):
-              report("ERROR: expected struct-filename stat ABI not found in SukiSU")
-              raise SystemExit(1)
-
-          report("SUKISU_BOOL_FEATURE_ABI=YES")
-          report("SUKISU_FACCESSAT_USERPTR_ABI=YES")
-          report("SUKISU_STAT_FILENAME_ABI=YES")
-
-          # Refuse accidental stacking of old experiments.
           stale = [
               "KSU_SUCOMPAT_PATH_LOOKUP_HARDWIRE",
               "KSU_SUCOMPAT_PATH_LOOKUP_FALLBACK_V2",
               "KSU_SUCOMPAT_SHELL_UID_PATH_FIX_V3",
               "KSU_SUCOMPAT_SHELL_UID_PATH_FIX_V4",
               "KSU_SUCOMPAT_BOOL_FILENAME_FIX_V5",
+              "KSU_SUCOMPAT_NEWFSTATAT_SHELL_FIX_V6",
               "ksu_sucompat_vfs_faccessat_bridge",
           ]
           for item in stale:
-              if item in open_text or item in stat_text:
-                  report(f"ERROR: stale experimental patch present: {item}")
+              if item in open_text or item in stat_text or item in h_text or item in c_text:
+                  report(f"ERROR: stale experimental patch already present: {item}")
                   raise SystemExit(1)
 
-          # ------------------------------------------------------------
-          # fs/open.c
-          # ------------------------------------------------------------
+          if MARKER in open_text or MARKER in stat_text or MARKER in h_text or MARKER in c_text:
+              report("ERROR: v7 marker already present before patch")
+              raise SystemExit(1)
+
           old_static_decl = "extern struct static_key_true ksu_su_compat_enabled;"
+
+          # Add an unambiguous KernelSU-side struct-filename helper.
+          helper_decl = "int ksu_handle_stat_filename(int *dfd, struct filename **filename, int *flags);"
+          if HELPER in h_text or HELPER in c_text:
+              report("ERROR: unique v7 helper name unexpectedly already exists")
+              raise SystemExit(1)
+
+          insert_decl_after = "extern bool ksu_su_compat_enabled;"
+          if h_text.count(insert_decl_after) != 1:
+              report(f"ERROR: expected one sucompat bool declaration in header, found {h_text.count(insert_decl_after)}")
+              raise SystemExit(1)
+          h_text = h_text.replace(insert_decl_after, insert_decl_after + "\n" + helper_decl, 1)
+
+          helper_impl = r'''
+
+          #include <linux/err.h>
+          #include <linux/fs.h>
+          #include <linux/printk.h>
+          #include <linux/string.h>
+
+          /* KSU_SUCOMPAT_FILENAME_ABI_FIX_V7
+           * Stable VFS bridge for SUSFS on 5.10.  This entry point always
+           * consumes struct filename ** and never reuses the ambiguous
+           * version-dependent ksu_handle_stat symbol.
+           */
+          int ksu_handle_stat_filename(int *dfd, struct filename **filename, int *flags)
+          {
+              struct filename *old_name;
+              struct filename *new_name;
+              const char *name;
+
+              (void)dfd;
+              (void)flags;
+
+              if (!filename || !*filename || IS_ERR(*filename))
+                  return 0;
+
+              old_name = *filename;
+              name = old_name->name;
+              if (!name)
+                  return 0;
+
+              if (strcmp(name, "/system/bin/su") &&
+                  strcmp(name, "/system/xbin/su"))
+                  return 0;
+
+              new_name = getname_kernel("/system/bin/sh");
+              if (IS_ERR(new_name))
+                  return PTR_ERR(new_name);
+
+              *filename = new_name;
+              putname(old_name);
+              pr_info("ksu_handle_stat_filename: su->sh!\n");
+              return 0;
+          }
+          '''
+          helper_impl = re.sub(r"(?m)^          ", "", helper_impl).rstrip() + "\n"
+          c_text = c_text.rstrip() + "\n" + helper_impl
+
+          # fs/open.c: retain the bool ABI fix, use the unique helper, and
+          # keep uid 2000 untouched in this path.
           old_open_decl_re = re.compile(
               r"extern\s+int\s+ksu_handle_faccessat\s*\(\s*"
               r"int\s*\*\s*dfd\s*,\s*"
@@ -937,18 +964,14 @@ jobs:
               r"int\s*\*\s*__unused_flags\s*\)\s*;",
               re.S,
           )
-
-          if old_static_decl not in open_text:
-              report("ERROR: fs/open.c stale static-key declaration not found exactly once")
-              raise SystemExit(1)
           if open_text.count(old_static_decl) != 1:
-              report(f"ERROR: fs/open.c static-key declaration count={open_text.count(old_static_decl)}")
+              report(f"ERROR: fs/open.c stale static-key declaration count={open_text.count(old_static_decl)}")
               raise SystemExit(1)
           if len(list(old_open_decl_re.finditer(open_text))) != 1:
-              report("ERROR: fs/open.c struct-filename faccessat declaration was not uniquely found")
+              report("ERROR: fs/open.c stale struct-filename faccessat declaration not uniquely found")
               raise SystemExit(1)
           if open_text.count("static_branch_likely(&ksu_su_compat_enabled)") != 1:
-              report("ERROR: fs/open.c expected exactly one static_branch_likely sucompat gate")
+              report("ERROR: fs/open.c expected exactly one static_branch_likely gate")
               raise SystemExit(1)
           if open_text.count("ksu_handle_faccessat(&dfd, &fname, &mode, NULL);") != 1:
               report("ERROR: fs/open.c expected exactly one stale struct-filename faccessat call")
@@ -957,13 +980,9 @@ jobs:
               report("ERROR: fs/open.c expected exactly one fname declaration")
               raise SystemExit(1)
 
-          open_text = open_text.replace(
-              old_static_decl,
-              "extern bool ksu_su_compat_enabled;",
-              1,
-          )
+          open_text = open_text.replace(old_static_decl, "extern bool ksu_su_compat_enabled;", 1)
           open_text = old_open_decl_re.sub(
-              "extern int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);",
+              f"extern int {HELPER}(int *dfd, struct filename **filename, int *flags);",
               open_text,
               count=1,
           )
@@ -979,74 +998,60 @@ jobs:
           )
           open_text = open_text.replace(
               "ksu_handle_faccessat(&dfd, &fname, &mode, NULL);",
-              "ksu_handle_stat(&dfd, &fname, &ksu_sucompat_stat_flags);",
+              f"{HELPER}(&dfd, &fname, &ksu_sucompat_stat_flags);",
               1,
           )
-
-          # Insert marker immediately before the bool gate.
-          gate = "\tif (likely(ksu_su_compat_enabled)) {"
-          if gate not in open_text:
-              report("ERROR: fs/open.c patched bool gate not found")
+          open_gate = "\tif (likely(ksu_su_compat_enabled)) {"
+          if open_text.count(open_gate) != 1:
+              report("ERROR: fs/open.c patched bool gate not uniquely found")
               raise SystemExit(1)
           open_text = open_text.replace(
-              gate,
-              f"\t/* {MARKER}: use SukiSU bool + struct-filename handler */\n" + gate,
+              open_gate,
+              f"\t/* {MARKER}: stable struct-filename ABI */\n" + open_gate,
               1,
           )
 
-          # ------------------------------------------------------------
-          # fs/stat.c
-          # ------------------------------------------------------------
-          if old_static_decl not in stat_text:
-              report("ERROR: fs/stat.c stale static-key declaration not found exactly once")
-              raise SystemExit(1)
-          if stat_text.count(old_static_decl) != 1:
-              report(f"ERROR: fs/stat.c static-key declaration count={stat_text.count(old_static_decl)}")
-              raise SystemExit(1)
-          if stat_text.count("static_branch_likely(&ksu_su_compat_enabled)") != 1:
-              report("ERROR: fs/stat.c expected exactly one static_branch_likely sucompat gate")
-              raise SystemExit(1)
-          if not re.search(
+          # fs/stat.c: same unique helper + v6-proven narrow uid-2000
+          # exception only for the newfstatat/stat path.
+          old_stat_decl_re = re.compile(
               r"extern\s+int\s+ksu_handle_stat\s*\(\s*int\s*\*\s*dfd\s*,\s*"
               r"struct\s+filename\s*\*\s*\*\s*filename\s*,\s*int\s*\*\s*flags\s*\)\s*;",
-              stat_text,
               re.S,
-          ):
-              report("ERROR: fs/stat.c expected struct-filename stat declaration missing")
+          )
+          if stat_text.count(old_static_decl) != 1:
+              report(f"ERROR: fs/stat.c stale static-key declaration count={stat_text.count(old_static_decl)}")
+              raise SystemExit(1)
+          if len(list(old_stat_decl_re.finditer(stat_text))) != 1:
+              report("ERROR: fs/stat.c struct-filename stat declaration not uniquely found")
+              raise SystemExit(1)
+          if stat_text.count("static_branch_likely(&ksu_su_compat_enabled)") != 1:
+              report("ERROR: fs/stat.c expected exactly one static_branch_likely gate")
               raise SystemExit(1)
           if stat_text.count("ksu_handle_stat(&dfd, &fname, &flags);") != 1:
               report("ERROR: fs/stat.c expected exactly one struct-filename stat call")
               raise SystemExit(1)
 
-          stat_text = stat_text.replace(
-              old_static_decl,
-              "extern bool ksu_su_compat_enabled;",
-              1,
+          stat_text = stat_text.replace(old_static_decl, "extern bool ksu_su_compat_enabled;", 1)
+          stat_text = old_stat_decl_re.sub(
+              f"extern int {HELPER}(int *dfd, struct filename **filename, int *flags);",
+              stat_text,
+              count=1,
           )
           stat_text = stat_text.replace(
               "static_branch_likely(&ksu_su_compat_enabled)",
               "likely(ksu_su_compat_enabled)",
               1,
           )
-          gate = "\tif (likely(ksu_su_compat_enabled)) {"
-          if gate not in stat_text:
-              report("ERROR: fs/stat.c patched bool gate not found")
+          stat_gate = "\tif (likely(ksu_su_compat_enabled)) {"
+          if stat_text.count(stat_gate) != 1:
+              report("ERROR: fs/stat.c patched bool gate not uniquely found")
               raise SystemExit(1)
           stat_text = stat_text.replace(
-              gate,
-              f"\t/* {MARKER}: use SukiSU bool feature ABI */\n" + gate,
+              stat_gate,
+              f"\t/* {MARKER}: stable struct-filename ABI */\n" + stat_gate,
               1,
           )
 
-          # ------------------------------------------------------------
-          # Runtime trace on this device proves Android /system/bin/sh
-          # resolves bare `su` exclusively with newfstatat (arm64 NR 79).
-          # Every PATH candidate returned -ENOENT and execve was never
-          # reached.  v5 fixed the bool/filename ABI but intentionally
-          # preserved the normal app allowlist, which excludes adb shell
-          # uid 2000.  Combine the proven v5 ABI correction with the
-          # narrow shell-uid exception only in the stat/newfstatat path.
-          # ------------------------------------------------------------
           old_nosu = "\tif (likely(susfs_is_current_proc_no_su()))\n\t\tgoto orig_flow;"
           new_nosu = (
               "\tif (likely(susfs_is_current_proc_no_su()) &&\n"
@@ -1058,28 +1063,36 @@ jobs:
               raise SystemExit(1)
           stat_text = stat_text.replace(old_nosu, new_nosu, 1)
 
-          old_allow = "\t\tif (unlikely(__ksu_is_allow_uid_for_current(current_uid().val)))\n\t\t\tksu_handle_stat(&dfd, &fname, &flags);"
+          old_allow = (
+              "\t\tif (unlikely(__ksu_is_allow_uid_for_current(current_uid().val)))\n"
+              "\t\t\tksu_handle_stat(&dfd, &fname, &flags);"
+          )
           new_allow = (
               "\t\tif (unlikely(__ksu_is_allow_uid_for_current(current_uid().val)) ||\n"
               "\t\t    unlikely(current_uid().val == 2000))\n"
-              "\t\t\tksu_handle_stat(&dfd, &fname, &flags);"
+              f"\t\t\t{HELPER}(&dfd, &fname, &flags);"
           )
           if stat_text.count(old_allow) != 1:
               report(f"ERROR: fs/stat.c expected one allowlist stat gate, found {stat_text.count(old_allow)}")
               raise SystemExit(1)
           stat_text = stat_text.replace(old_allow, new_allow, 1)
 
-          # ------------------------------------------------------------
-          # Strict final verification
-          # ------------------------------------------------------------
           checks = {
+              "helper_header_decl": helper_decl in h_text,
+              "helper_source_def": f"int {HELPER}(int *dfd, struct filename **filename, int *flags)" in c_text,
+              "helper_system_bin_su": 'strcmp(name, "/system/bin/su")' in c_text,
+              "helper_system_xbin_su": 'strcmp(name, "/system/xbin/su")' in c_text,
+              "helper_getname_kernel_sh": 'getname_kernel("/system/bin/sh")' in c_text,
+              "helper_releases_old_fname": "putname(old_name);" in c_text,
               "open_bool_decl": "extern bool ksu_su_compat_enabled;" in open_text,
               "stat_bool_decl": "extern bool ksu_su_compat_enabled;" in stat_text,
               "open_no_static_key": "static_branch_likely(&ksu_su_compat_enabled)" not in open_text,
               "stat_no_static_key": "static_branch_likely(&ksu_su_compat_enabled)" not in stat_text,
+              "open_unique_helper_call": f"{HELPER}(&dfd, &fname, &ksu_sucompat_stat_flags);" in open_text,
+              "stat_unique_helper_call": f"{HELPER}(&dfd, &fname, &flags);" in stat_text,
+              "open_no_ambiguous_stat_call": "ksu_handle_stat(&dfd, &fname" not in open_text,
+              "stat_no_ambiguous_stat_call": "ksu_handle_stat(&dfd, &fname" not in stat_text,
               "open_no_bad_faccess_call": "ksu_handle_faccessat(&dfd, &fname" not in open_text,
-              "open_stat_filename_call": "ksu_handle_stat(&dfd, &fname, &ksu_sucompat_stat_flags);" in open_text,
-              "stat_stat_filename_call": "ksu_handle_stat(&dfd, &fname, &flags);" in stat_text,
               "stat_shell_nosu_bypass": "current_uid().val != 2000" in stat_text,
               "stat_shell_allow": "current_uid().val == 2000" in stat_text,
               "open_no_shell_uid_bypass": "current_uid().val == 2000" not in open_text,
@@ -1089,37 +1102,40 @@ jobs:
           for key, ok in checks.items():
               report(f"{key.upper()}={'YES' if ok else 'NO'}")
           if not all(checks.values()):
-              report(f"ERROR: v6 verification failed: {checks}")
+              report(f"ERROR: v7 verification failed: {checks}")
               raise SystemExit(1)
 
+          su_h.write_text(h_text, encoding="utf-8")
+          su_c.write_text(c_text, encoding="utf-8")
           open_path.write_text(open_text, encoding="utf-8")
           stat_path.write_text(stat_text, encoding="utf-8")
 
-          report("SUCOMPAT_NEWFSTATAT_SHELL_FIX_V6=YES")
+          report("SUCOMPAT_FILENAME_ABI_FIX_V7=YES")
           PY
 
           echo "" | tee -a "$REPORT"
-          echo "=== VFS sucompat call sites after v6 ===" | tee -a "$REPORT"
-          grep -n -B 16 -A 26 \
-            -E 'KSU_SUCOMPAT_NEWFSTATAT_SHELL_FIX_V6|ksu_su_compat_enabled|ksu_handle_(faccessat|stat)|susfs_is_current_proc_no_su|ksu_sucompat_stat_flags' \
-            "$OPEN_C" "$STAT_C" \
-            | head -n 460 \
+          echo "=== SukiSU/VFS sucompat call sites after v7 ===" | tee -a "$REPORT"
+          grep -n -B 18 -A 34 \
+            -E 'KSU_SUCOMPAT_FILENAME_ABI_FIX_V7|ksu_su_compat_enabled|ksu_handle_(faccessat|stat|stat_filename)|susfs_is_current_proc_no_su|ksu_sucompat_stat_flags|getname_kernel\("/system/bin/sh"\)' \
+            "$SUCOMPAT_H" "$SUCOMPAT_C" "$OPEN_C" "$STAT_C" \
+            | head -n 620 \
             | tee -a "$REPORT" \
             || true
 
-          if ! grep -q '^SUCOMPAT_NEWFSTATAT_SHELL_FIX_V6=YES$' "$REPORT"; then
-            echo "❌ SukiSU traditional su v6 verification failed"
+          if ! grep -q '^SUCOMPAT_FILENAME_ABI_FIX_V7=YES$' "$REPORT"; then
+            echo "❌ SukiSU traditional su v7 verification failed"
             exit 1
           fi
 
-          echo "✅ v6 applied: fixed stale SUSFS static-key ABI"
-          echo "✅ v6 applied: removed struct-filename call into const-char faccessat ABI"
-          echo "✅ fs/open.c now reuses SukiSU's existing struct-filename stat handler"
-          echo "✅ fs/stat.c keeps its native struct-filename stat handler + shell uid 2000 PATH visibility"
-          echo "✅ normal policy preserved; only uid 2000 is exempted in fs/stat.c/newfstatat lookup"
+          echo "✅ v7 applied: unique struct-filename helper added in SukiSU"
+          echo "✅ v7 applied: fs/open.c and fs/stat.c no longer call ambiguous ksu_handle_stat ABI"
+          echo "✅ v7 applied: /system/bin/su and /system/xbin/su PATH probes redirect to /system/bin/sh"
+          echo "✅ v7 applied: old struct filename is released before filename_lookup consumes the replacement"
+          echo "✅ fs/stat.c keeps the proven uid 2000 newfstatat-only exception"
+          echo "✅ fs/open.c still has no uid 2000 bypass"
+          echo "✅ existing execve sucompat/root policy remains authoritative"
           echo "✅ no alias, no /system modification, no extra su module"
           echo "✅ BTF/pahole/resolve_btfids/LTO configuration untouched"
-
       # OGKI转换GKI，无需修改 dtbo 开机
       - name: Apply Convert HMBIRD_OGKI to HMBIRD_GKI
         if: ${{ (fromJSON(env.VERSIONLEVEL) > 6 || (fromJSON(env.VERSIONLEVEL) == 6 && fromJSON(env.PATCHLEVEL) >= 6)) && github.event.inputs.SCHED_HMBIRD == 'false' }}
@@ -4490,7 +4506,7 @@ jobs:
             btf-sanity.txt
             btf-deep-analysis.txt
             pahole-runtime.txt
-            sucompat-newfstatat-fix-v6.txt
+            sucompat-newfstatat-fix-v7.txt
 
             vmlinux-before-btfids
             btf-bin-before-btfids.o

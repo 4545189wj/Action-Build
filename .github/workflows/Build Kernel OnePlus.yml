@@ -800,7 +800,7 @@ jobs:
         run: |
           kotlinc -script "$GITHUB_WORKSPACE/kernel_workspace/Action-Build/scripts/PatchFakePatches.kts" revert "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/common"
 
-      - name: Permanent SukiSU traditional su shell-path fix v5
+      - name: Permanent SukiSU traditional su newfstatat fix v6
         run: |
           set -euo pipefail
 
@@ -812,11 +812,11 @@ jobs:
           KSU_DIR="$PWD/KernelSU"
           SUCOMPAT_H="$KSU_DIR/kernel/feature/sucompat.h"
           SUCOMPAT_C="$KSU_DIR/kernel/feature/sucompat.c"
-          REPORT="$GITHUB_WORKSPACE/sucompat-shell-path-fix-v5.txt"
+          REPORT="$GITHUB_WORKSPACE/sucompat-newfstatat-fix-v6.txt"
 
           rm -f "$REPORT"
 
-          echo "=== Permanent SukiSU traditional su shell-path fix v5 ===" | tee "$REPORT"
+          echo "=== Permanent SukiSU traditional su newfstatat fix v6 ===" | tee "$REPORT"
           echo "KernelSU dir : $KSU_DIR" | tee -a "$REPORT"
           echo "open.c       : $OPEN_C" | tee -a "$REPORT"
           echo "stat.c       : $STAT_C" | tee -a "$REPORT"
@@ -850,7 +850,7 @@ jobs:
           su_c = Path(sys.argv[4])
           report_path = Path(sys.argv[5])
 
-          MARKER = "KSU_SUCOMPAT_BOOL_FILENAME_FIX_V5"
+          MARKER = "KSU_SUCOMPAT_NEWFSTATAT_SHELL_FIX_V6"
 
           def report(msg: str) -> None:
               print(msg)
@@ -917,6 +917,7 @@ jobs:
               "KSU_SUCOMPAT_PATH_LOOKUP_FALLBACK_V2",
               "KSU_SUCOMPAT_SHELL_UID_PATH_FIX_V3",
               "KSU_SUCOMPAT_SHELL_UID_PATH_FIX_V4",
+              "KSU_SUCOMPAT_BOOL_FILENAME_FIX_V5",
               "ksu_sucompat_vfs_faccessat_bridge",
           ]
           for item in stale:
@@ -1038,6 +1039,37 @@ jobs:
           )
 
           # ------------------------------------------------------------
+          # Runtime trace on this device proves Android /system/bin/sh
+          # resolves bare `su` exclusively with newfstatat (arm64 NR 79).
+          # Every PATH candidate returned -ENOENT and execve was never
+          # reached.  v5 fixed the bool/filename ABI but intentionally
+          # preserved the normal app allowlist, which excludes adb shell
+          # uid 2000.  Combine the proven v5 ABI correction with the
+          # narrow shell-uid exception only in the stat/newfstatat path.
+          # ------------------------------------------------------------
+          old_nosu = "\tif (likely(susfs_is_current_proc_no_su()))\n\t\tgoto orig_flow;"
+          new_nosu = (
+              "\tif (likely(susfs_is_current_proc_no_su()) &&\n"
+              "\t    current_uid().val != 2000)\n"
+              "\t\tgoto orig_flow;"
+          )
+          if stat_text.count(old_nosu) != 1:
+              report(f"ERROR: fs/stat.c expected one no-su gate, found {stat_text.count(old_nosu)}")
+              raise SystemExit(1)
+          stat_text = stat_text.replace(old_nosu, new_nosu, 1)
+
+          old_allow = "\t\tif (unlikely(__ksu_is_allow_uid_for_current(current_uid().val)))\n\t\t\tksu_handle_stat(&dfd, &fname, &flags);"
+          new_allow = (
+              "\t\tif (unlikely(__ksu_is_allow_uid_for_current(current_uid().val)) ||\n"
+              "\t\t    unlikely(current_uid().val == 2000))\n"
+              "\t\t\tksu_handle_stat(&dfd, &fname, &flags);"
+          )
+          if stat_text.count(old_allow) != 1:
+              report(f"ERROR: fs/stat.c expected one allowlist stat gate, found {stat_text.count(old_allow)}")
+              raise SystemExit(1)
+          stat_text = stat_text.replace(old_allow, new_allow, 1)
+
+          # ------------------------------------------------------------
           # Strict final verification
           # ------------------------------------------------------------
           checks = {
@@ -1048,41 +1080,44 @@ jobs:
               "open_no_bad_faccess_call": "ksu_handle_faccessat(&dfd, &fname" not in open_text,
               "open_stat_filename_call": "ksu_handle_stat(&dfd, &fname, &ksu_sucompat_stat_flags);" in open_text,
               "stat_stat_filename_call": "ksu_handle_stat(&dfd, &fname, &flags);" in stat_text,
+              "stat_shell_nosu_bypass": "current_uid().val != 2000" in stat_text,
+              "stat_shell_allow": "current_uid().val == 2000" in stat_text,
+              "open_no_shell_uid_bypass": "current_uid().val == 2000" not in open_text,
               "open_marker": MARKER in open_text,
               "stat_marker": MARKER in stat_text,
           }
           for key, ok in checks.items():
               report(f"{key.upper()}={'YES' if ok else 'NO'}")
           if not all(checks.values()):
-              report(f"ERROR: v5 verification failed: {checks}")
+              report(f"ERROR: v6 verification failed: {checks}")
               raise SystemExit(1)
 
           open_path.write_text(open_text, encoding="utf-8")
           stat_path.write_text(stat_text, encoding="utf-8")
 
-          report("SUCOMPAT_BOOL_FILENAME_FIX_V5=YES")
+          report("SUCOMPAT_NEWFSTATAT_SHELL_FIX_V6=YES")
           PY
 
           echo "" | tee -a "$REPORT"
-          echo "=== VFS sucompat call sites after v5 ===" | tee -a "$REPORT"
+          echo "=== VFS sucompat call sites after v6 ===" | tee -a "$REPORT"
           grep -n -B 16 -A 26 \
-            -E 'KSU_SUCOMPAT_BOOL_FILENAME_FIX_V5|ksu_su_compat_enabled|ksu_handle_(faccessat|stat)|susfs_is_current_proc_no_su|ksu_sucompat_stat_flags' \
+            -E 'KSU_SUCOMPAT_NEWFSTATAT_SHELL_FIX_V6|ksu_su_compat_enabled|ksu_handle_(faccessat|stat)|susfs_is_current_proc_no_su|ksu_sucompat_stat_flags' \
             "$OPEN_C" "$STAT_C" \
             | head -n 460 \
             | tee -a "$REPORT" \
             || true
 
-          if ! grep -q '^SUCOMPAT_BOOL_FILENAME_FIX_V5=YES$' "$REPORT"; then
-            echo "❌ SukiSU traditional su v5 verification failed"
+          if ! grep -q '^SUCOMPAT_NEWFSTATAT_SHELL_FIX_V6=YES$' "$REPORT"; then
+            echo "❌ SukiSU traditional su v6 verification failed"
             exit 1
           fi
 
-          echo "✅ v5 applied: fixed stale SUSFS static-key ABI"
-          echo "✅ v5 applied: removed struct-filename call into const-char faccessat ABI"
+          echo "✅ v6 applied: fixed stale SUSFS static-key ABI"
+          echo "✅ v6 applied: removed struct-filename call into const-char faccessat ABI"
           echo "✅ fs/open.c now reuses SukiSU's existing struct-filename stat handler"
-          echo "✅ fs/stat.c keeps its native struct-filename stat handler"
-          echo "✅ original SUSFS no-su and SukiSU allowlist policy preserved"
-          echo "✅ no UID-2000 bypass, no alias, no /system modification, no extra su module"
+          echo "✅ fs/stat.c keeps its native struct-filename stat handler + shell uid 2000 PATH visibility"
+          echo "✅ normal policy preserved; only uid 2000 is exempted in fs/stat.c/newfstatat lookup"
+          echo "✅ no alias, no /system modification, no extra su module"
           echo "✅ BTF/pahole/resolve_btfids/LTO configuration untouched"
 
       # OGKI转换GKI，无需修改 dtbo 开机
@@ -4455,7 +4490,7 @@ jobs:
             btf-sanity.txt
             btf-deep-analysis.txt
             pahole-runtime.txt
-            sucompat-shell-path-fix-v5.txt
+            sucompat-newfstatat-fix-v6.txt
 
             vmlinux-before-btfids
             btf-bin-before-btfids.o
